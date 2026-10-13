@@ -1,0 +1,24 @@
+# Digitama — guia para agentes
+
+Pet de área de trabalho (Tauri 2, só Windows) que reage aos hooks do Claude Code. Visão geral, uso e arquitetura no [README.md](README.md).
+
+## Build e testes
+```
+npm install
+npm run tauri dev              # compila o relay (release) antes
+npx tsc --noEmit               # tipos do frontend
+cargo test --workspace         # testes do relay e do app
+node scripts/preview-sprites.mjs out.png 4   # folha com todos os sprites
+```
+
+## Regras
+- **Nunca travar o Claude Code**: o relay (`hook/`) sai na hora se o app não responde; só `PermissionRequest` espera, e só depois do ACK do balão.
+- **Nunca permitir sem clique**: sem decisão humana, o relay não imprime nada (`hook/src/reply.rs`).
+- **Nunca gravar `~/.claude/settings.json` sem prévia**: diff → clique → backup datado → gravação, recusando se o arquivo mudou (`hooks_install.rs`).
+- O chat usa o `claude.exe` logado (OAuth). Não adicionar chamadas diretas à API nem guardar chaves.
+- Criar janelas (`WebviewWindowBuilder::build`) só em contexto assíncrono: em handler síncrono trava no Windows (`open_window_later`).
+- `DisconnectNamedPipe` descarta dados não lidos: responda pelo pipe e use `drain_then_disconnect`.
+- Sprites reais (Digimon World DS) vêm de `scripts/fetch-sprites.mjs` para a pasta local do usuário (%APPDATA%), nunca para o repositório; `src/pet/render.ts` remove fundo, recorta, gera silhuetas e o ciclo de passos. `src/pet/sprites.ts` (desenho em código) é só a reserva e os ovos.
+- Não automatizar mouse/teclado nem tirar prints da tela inteira do usuário: ele trabalha no ERP com dados de clientes (LGPD). Peça para ele testar.
+- Linhas evolutivas escolhidas pelo usuário: Agumon → WarGreymon, Guilmon → Gallantmon, Dorumon → Alphamon. Escolhas criativas (personagens, estilo): pergunte antes.
+- Textos da interface e comentários em português do Brasil.

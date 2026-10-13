@@ -1,0 +1,143 @@
+/* Kit visual "Digivice": fontes pixeladas, hexágonos e painéis angulados no
+   estilo dos menus de Digimon (Cyber Sleuth / Next Order), em pixel art. */
+@import "@fontsource/press-start-2p/400.css";
+@import "@fontsource/vt323/400.css";
+
+:root {
+  --dv-deep: #061238;
+  --dv-blue: #0b2a7a;
+  --dv-mid: #1450c8;
+  --dv-cyan: #3fe0ff;
+  --dv-ice: #bff4ff;
+  --dv-gold: #ffd23f;
+  --dv-red: #ff4d5e;
+  --dv-green: #3dff8a;
+  --dv-ink: #eaf6ff;
+  --dv-dark: #0b0820;
+  --dv-title: "Press Start 2P", "Cascadia Mono", monospace;
+  --dv-body: "VT323", "Cascadia Mono", Consolas, monospace;
+}
+
+.px-icon {
+  image-rendering: pixelated;
+  pointer-events: none;
+}
+
+/* Botão hexagonal: anel ciano, miolo azul escuro, brilho no hover. */
+.hex {
+  --size: 54px;
+  position: relative;
+  width: var(--size);
+  height: calc(var(--size) * 0.92);
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  cursor: pointer;
+  background: var(--dv-cyan);
+  clip-path: polygon(25% 0, 75% 0, 100% 50%, 75% 100%, 25% 100%, 0 50%);
+  transition: transform 0.12s steps(3), filter 0.12s;
+}
+.hex::before {
+  content: "";
+  position: absolute;
+  inset: 3px;
+  background: linear-gradient(160deg, #2a5ad8 0%, var(--dv-blue) 45%, var(--dv-deep) 100%);
+  clip-path: inherit;
+}
+.hex::after {
+  content: "";
+  position: absolute;
+  inset: 3px 3px 55% 3px;
+  background: rgba(255, 255, 255, 0.12);
+  clip-path: polygon(25% 0, 75% 0, 100% 100%, 0 100%);
+}
+.hex > * {
+  position: relative;
+  z-index: 1;
+}
+.hex:hover,
+.hex.on {
+  transform: scale(1.12);
+  filter: drop-shadow(0 0 6px var(--dv-cyan)) brightness(1.15);
+}
+.hex.on {
+  background: var(--dv-gold);
+}
+.hex.danger {
+  background: var(--dv-red);
+}
+
+/* Faixa de título: a placa azul com cantos cortados ("Digimon", "Battle"). */
+.dv-banner {
+  display: inline-block;
+  padding: 7px 22px 7px 16px;
+  font: 12px var(--dv-title);
+  color: #fff;
+  letter-spacing: 0.04em;
+  text-shadow: 2px 2px 0 var(--dv-dark);
+  background: linear-gradient(180deg, #3a7cff 0%, var(--dv-mid) 50%, var(--dv-blue) 100%);
+  clip-path: polygon(0 0, calc(100% - 14px) 0, 100% 50%, calc(100% - 14px) 100%, 0 100%, 8px 50%);
+  box-shadow: inset 0 0 0 2px var(--dv-cyan);
+}
+
+/* Painel em degraus, com borda ciano e cantos chanfrados. */
+.dv-panel {
+  position: relative;
+  padding: 14px 16px;
+  color: var(--dv-ink);
+  background:
+    repeating-linear-gradient(0deg, rgba(255, 255, 255, 0.025) 0 2px, transparent 2px 4px),
+    linear-gradient(180deg, rgba(20, 70, 190, 0.92), rgba(6, 18, 56, 0.95));
+  clip-path: polygon(14px 0, 100% 0, 100% calc(100% - 14px), calc(100% - 14px) 100%, 0 100%, 0 14px);
+  box-shadow: inset 0 0 0 2px var(--dv-cyan), inset 0 0 0 4px rgba(6, 18, 56, 0.9), inset 0 0 0 6px rgba(63, 224, 255, 0.35);
+}
+
+.dv-label {
+  font: 9px var(--dv-title);
+  color: var(--dv-cyan);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+/* Barra tipo HP/SP. */
+.dv-bar {
+  height: 8px;
+  background: var(--dv-dark);
+  box-shadow: 0 0 0 2px var(--dv-dark), 0 0 0 3px rgba(63, 224, 255, 0.5);
+}
+.dv-bar > i {
+  display: block;
+  height: 100%;
+  background: repeating-linear-gradient(90deg, var(--dv-green) 0 6px, #8dffbf 6px 8px);
+}
+.dv-bar.sp > i {
+  background: repeating-linear-gradient(90deg, #3fa8ff 0 6px, #9fd8ff 6px 8px);
+}
+
+/* Botões retangulares pixelados. */
+.dv-btn {
+  font: 18px var(--dv-body);
+  padding: 4px 14px;
+  border: 0;
+  cursor: pointer;
+  color: var(--dv-ink);
+  background: var(--dv-blue);
+  box-shadow: inset 0 0 0 2px var(--dv-cyan), inset -3px -3px 0 rgba(0, 0, 0, 0.35);
+  clip-path: polygon(6px 0, 100% 0, 100% calc(100% - 6px), calc(100% - 6px) 100%, 0 100%, 0 6px);
+}
+.dv-btn:hover {
+  background: var(--dv-mid);
+}
+.dv-btn.go {
+  background: #0f7a3c;
+  box-shadow: inset 0 0 0 2px var(--dv-green), inset -3px -3px 0 rgba(0, 0, 0, 0.35);
+}
+.dv-btn.warn {
+  background: #7a1022;
+  box-shadow: inset 0 0 0 2px var(--dv-red), inset -3px -3px 0 rgba(0, 0, 0, 0.35);
+}
+.dv-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}

@@ -1,0 +1,16 @@
+[workspace]
+members = ["src-tauri", "hook"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+# O relay roda a cada evento do Claude Code: precisa iniciar rápido.
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

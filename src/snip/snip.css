@@ -1,0 +1,126 @@
+html,
+body.snip {
+  margin: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: #000;
+  user-select: none;
+  font-family: var(--dv-body);
+}
+
+canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  cursor: crosshair;
+}
+
+.hidden {
+  display: none !important;
+}
+
+.hud {
+  position: absolute;
+  top: 18px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  pointer-events: none;
+  transition: opacity 0.2s steps(3);
+}
+.hud.faded {
+  opacity: 0.25;
+}
+.hud .hint {
+  font-size: 22px;
+  color: var(--dv-ice);
+  text-shadow: 2px 2px 0 var(--dv-dark);
+}
+
+.size-tag {
+  position: absolute;
+  padding: 5px 8px;
+  font: 8px var(--dv-title);
+  color: var(--dv-ice);
+  background: var(--dv-blue);
+  box-shadow: inset 0 0 0 2px var(--dv-cyan);
+  pointer-events: none;
+}
+
+.toolbar {
+  position: absolute;
+  display: flex;
+  gap: 4px;
+  padding: 8px;
+  background: linear-gradient(180deg, rgba(20, 70, 190, 0.95), rgba(6, 18, 56, 0.97));
+  box-shadow: inset 0 0 0 2px var(--dv-cyan), 0 6px 0 rgba(0, 0, 0, 0.35);
+  clip-path: polygon(10px 0, 100% 0, 100% calc(100% - 10px), calc(100% - 10px) 100%, 0 100%, 0 10px);
+}
+.toolbar.vertical {
+  flex-direction: column;
+}
+.toolbar .hex {
+  --size: 40px;
+}
+
+.hex.swatch::before {
+  background: var(--swatch, #ff3b3b);
+}
+
+.palette {
+  position: absolute;
+  display: grid;
+  grid-template-columns: repeat(4, 22px);
+  gap: 4px;
+  padding: 7px;
+  background: var(--dv-deep);
+  box-shadow: inset 0 0 0 2px var(--dv-cyan);
+}
+.palette button {
+  width: 22px;
+  height: 22px;
+  border: 0;
+  cursor: pointer;
+  box-shadow: inset 0 0 0 2px rgba(0, 0, 0, 0.5);
+}
+.palette button:hover {
+  box-shadow: inset 0 0 0 2px #fff;
+}
+
+.text-input {
+  position: absolute;
+  min-width: 160px;
+  padding: 0 4px;
+  font: 26px VT323, monospace;
+  background: rgba(6, 18, 56, 0.6);
+  border: 0;
+  outline: 2px dashed var(--dv-cyan);
+}
+
+.toast {
+  position: absolute;
+  left: 50%;
+  bottom: 60px;
+  transform: translateX(-50%);
+  padding: 12px 20px;
+  font: 12px var(--dv-title);
+  color: var(--dv-gold);
+  background: var(--dv-blue);
+  box-shadow: inset 0 0 0 3px var(--dv-cyan), 0 0 24px rgba(63, 224, 255, 0.6);
+  animation: toast 0.2s steps(4);
+  max-width: 80vw;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@keyframes toast {
+  from {
+    transform: translateX(-50%) scale(0.5);
+  }
+}
