@@ -15,6 +15,8 @@ interface Frame {
   h: number;
   /** Ciclo de passos gerado a partir da pose parada (só nela). */
   walk?: HTMLCanvasElement[];
+  /** Respiração: [solto, -1 px, -2 px] — a cabeça e o tronco descem e sobem. */
+  breath?: HTMLCanvasElement[];
 }
 
 /** Para onde o sprite olha no arquivo (1 = direita) e redução de arte ampliada. */
@@ -111,8 +113,9 @@ async function processFrame(url: string, down = 1): Promise<Frame> {
  */
 function makeWalk(src: HTMLCanvasElement): HTMLCanvasElement[] {
   const w = src.width, h = src.height;
-  const legTop = Math.round(h * 0.68);
-  const lift = Math.max(2, Math.round(h * 0.07));
+  // só a faixa dos pés sobe; o resto do corpo fica por baixo (sem buraco nem corte)
+  const legTop = Math.round(h * 0.75);
+  const lift = Math.max(2, Math.round(h * 0.06));
   const mid = Math.round(w / 2);
   const frames: HTMLCanvasElement[] = [];
   for (const phase of [0, 1, 2, 3]) {
@@ -120,16 +123,37 @@ function makeWalk(src: HTMLCanvasElement): HTMLCanvasElement[] {
     const g = c.getContext("2d")!;
     g.imageSmoothingEnabled = false;
     const step = phase === 1 || phase === 3;
-    const liftLeft = phase === 1 ? lift : 0;
-    const liftRight = phase === 3 ? lift : 0;
-    // pernas primeiro: a metade que dá o passo sobe
-    g.drawImage(src, 0, legTop, mid, h - legTop, 0, legTop - liftLeft, mid, h - legTop);
-    g.drawImage(src, mid, legTop, w - mid, h - legTop, mid, legTop - liftRight, w - mid, h - legTop);
-    // corpo por cima, descendo 1 px no passo (o peso cai na perna de apoio)
-    g.drawImage(src, 0, 0, w, legTop, 0, step ? 1 : 0, w, legTop);
+    // o corpo desce 1 px no passo (o peso cai na perna de apoio)
+    g.drawImage(src, 0, step ? 1 : 0);
+    if (step) {
+      const x0 = phase === 1 ? 0 : mid, x1 = phase === 1 ? mid : w;
+      // o pé que dá o passo: apaga embaixo e redesenha mais alto
+      g.clearRect(x0, legTop, x1 - x0, h - legTop);
+      g.drawImage(src, x0, legTop, x1 - x0, h - legTop, x0, legTop - lift + 1, x1 - x0, h - legTop);
+    }
     frames.push(c);
   }
   return frames;
+}
+
+/**
+ * Respiração em quadros, como num sprite de jogo: a parte de cima (acima de
+ * ~55% da altura) desce 1 e 2 px sobre a de baixo; pés e base ficam parados.
+ * Sprites pequenos só descem 1 px, para não "derreter".
+ */
+function makeBreath(src: HTMLCanvasElement): HTMLCanvasElement[] {
+  const w = src.width, h = src.height;
+  const split = Math.round(h * 0.55);
+  const offsets = [0, 1, h >= 80 ? 2 : 1];
+  return offsets.map((k) => {
+    if (k === 0) return src;
+    const c = canvas(w, h);
+    const g = c.getContext("2d")!;
+    g.imageSmoothingEnabled = false;
+    g.drawImage(src, 0, split, w, h - split, 0, split, w, h - split);
+    g.drawImage(src, 0, 0, w, split, 0, k, w, split);
+    return c;
+  });
 }
 
 /** Carrega os pacotes vindos do backend (`id` ou `id/pose` → data URL). */
@@ -142,6 +166,7 @@ export async function loadPacks(map: Record<string, string>) {
       try {
         const frame = await processFrame(url, PACK_INFO[id]?.down ?? 1);
         if (pose === "idle") frame.walk = makeWalk(frame.normal);
+        frame.breath = makeBreath(frame.normal);
         const entry = packs.get(id) ?? {};
         entry[pose as Pose] = frame;
         packs.set(id, entry);
@@ -206,6 +231,10 @@ export interface DrawOpts {
   pose?: Pose;
   /** Quadro do ciclo de passos (pose "walk"). */
   step?: number;
+  /** Quadro de respiração (0..2). */
+  breath?: number;
+  /** Rastro: deslocamentos de cópias fantasmas (px, no sentido do mundo). */
+  ghosts?: number[];
   /** Para onde deve olhar: 1 direita, -1 esquerda. */
   facing?: number;
   sx?: number;
@@ -223,13 +252,28 @@ export function drawMon(g: CanvasRenderingContext2D, id: string, o: DrawOpts): [
   const flip = (o.facing ?? native) !== native;
   const w = f.w * o.scale, h = f.h * o.scale;
   const sx = o.sx ?? 1, sy = o.sy ?? 1;
+  const body =
+    o.pose === "walk" && f.walk
+      ? f.walk[(o.step ?? 0) % f.walk.length]
+      : f.breath && o.breath
+        ? f.breath[Math.max(0, Math.min(f.breath.length - 1, o.breath))]
+        : f.normal;
+  // rastro: cópias translúcidas atrás, as mais distantes mais apagadas
+  (o.ghosts ?? []).forEach((gx, i) => {
+    g.save();
+    g.imageSmoothingEnabled = false;
+    g.globalAlpha = (o.alpha ?? 1) * (0.42 - i * 0.12);
+    g.translate(Math.round(o.x + gx), Math.round(o.y));
+    g.scale(flip ? -1 : 1, 1);
+    g.drawImage(body, -Math.round(w / 2), -h, w, h);
+    g.restore();
+  });
   g.save();
   g.imageSmoothingEnabled = false;
   g.globalAlpha = o.alpha ?? 1;
   g.translate(Math.round(o.x), Math.round(o.y));
   if (o.rot) g.rotate(o.rot);
   g.scale((flip ? -1 : 1) * sx, sy);
-  const body = o.pose === "walk" && f.walk ? f.walk[(o.step ?? 0) % f.walk.length] : f.normal;
   g.drawImage(body, -Math.round(w / 2), -h, w, h);
   if (o.white) {
     g.globalAlpha = (o.alpha ?? 1) * Math.min(1, o.white);

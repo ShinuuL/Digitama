@@ -10,8 +10,9 @@ import { LINES, STAGES, monFor, pick, stageForXp, type Mon } from "../shared/lor
 import { setSoundEnabled, sfx } from "../shared/sound";
 import { Bubble, type Question } from "./bubble";
 import { Fx } from "./fx";
-import { drawMon, drawMonFit, drawGrid, loadPacks, monBox, monScale, type Pose } from "./render";
+import { drawMon, drawMonFit, drawGrid, loadPacks, monBox, monScale } from "./render";
 import { Ring } from "./ring";
+import { base, compose, shot, SHOT_DUR, type Base, type Shot } from "./anim";
 import { EXCLAIM } from "./sprites";
 
 const W = window.innerWidth;
@@ -94,7 +95,8 @@ function say(text: string, ttl?: number) {
 }
 
 function play(name: OneShot["name"], dur: number, extra: Partial<OneShot> = {}) {
-  anim = { name, t0: performance.now(), dur, ...extra };
+  const fixed = (SHOT_DUR as Record<string, number>)[name];
+  anim = { name, t0: performance.now(), dur: fixed ? fixed * 1000 : dur, ...extra };
 }
 
 function attack(withBanner = true) {
@@ -425,7 +427,6 @@ bubble.onChange = () => {
 // ── Laço de desenho ──────────────────────────────────────────────────────────
 
 let last = performance.now();
-let walkStep = 0;
 let nextNote = 0;
 let nextZ = 0;
 
@@ -476,51 +477,30 @@ function frameInner(now: number) {
     nextIdleLine = now + 40000 + Math.random() * 50000;
   }
 
-  // transformação do frame
-  let dx = 0, dy = 0, sx = 1, sy = 1, rot = 0, white = 0, red = 0;
-  let flip = facing < 0;
+  // transformação do frame (src/pet/anim.ts)
+  let white = 0, red = 0, rot = 0;
   let drawId = id;
-  let pose: Pose = "idle";
   const walking = Math.abs(targetX - posX) > 2 && !anim;
+  const mode: Base = stage === 0 ? "egg"
+    : sleeping ? "sleep"
+    : music === "dance" ? "dance"
+    : music === "vibe" ? "vibe"
+    : working ? "work"
+    : walking ? (stage >= 3 ? "walk" : "hop")
+    : "idle";
+  const baseLook = base(mode, t, walked);
+  let look = baseLook;
+  let flip = baseLook.flip ?? facing < 0;
 
-  if (sleeping) {
-    sy = 0.92 + Math.sin(t * 1.5) * 0.02;
-    if (now > nextZ) {
-      fx.z(W / 2 + posX + 20, petBox[1] + 4);
-      nextZ = now + 1500;
-    }
-  } else if (music === "dance") {
-    const beat = t * 2.1; // ~126 bpm
-    dx = Math.sin(beat * Math.PI) * 14;
-    dy = -Math.abs(Math.sin(beat * Math.PI * 2)) * 10;
-    sy = 1 + Math.sin(beat * Math.PI * 4) * 0.06;
-    flip = Math.floor(beat) % 2 === 0;
-    // pose de ataque no contratempo: parece um passinho de dança
-    if (Math.floor(beat * 2) % 4 === 1) pose = "attack";
-    if (now > nextNote) {
-      fx.note(W / 2 + posX + (Math.random() - 0.5) * 80, petBox[1] + 10);
-      nextNote = now + 380;
-    }
-  } else if (music === "vibe") {
-    dy = -Math.abs(Math.sin(t * Math.PI * 2.1)) * 3;
-    rot = Math.sin(t * Math.PI * 1.05) * 0.04;
-  } else if (working) {
-    dy = -Math.abs(Math.sin(t * 9)) * 4;
-    if (Math.random() < dt * 0.8) fx.sparkle(W / 2 + posX, petBox[1] + 10, 2, "#9fe6ff");
-  } else if (walking && stage >= 3) {
-    // passos: um quadro a cada ~7 px andados, com um leve balanço
-    pose = "walk";
-    walkStep = Math.floor(walked / 7) % 4;
-    dy = walkStep % 2 === 1 ? 0 : -1;
-  } else if (walking) {
-    // bebês andam saltitando, como nos jogos
-    const hop = Math.abs(Math.sin(walked / 9));
-    dy = -hop * 7;
-    sy = 1 + (hop < 0.2 ? -0.08 : 0.03);
-  } else {
-    sy = 1 + Math.sin(t * 2.4) * 0.025;
-    if (stage === 0) rot = Math.sin(t * 3) * 0.04 * (Math.sin(t * 0.7) > 0.6 ? 1 : 0);
+  if (sleeping && now > nextZ) {
+    fx.z(W / 2 + posX + 20, petBox[1] + 4);
+    nextZ = now + 1500;
   }
+  if (music === "dance" && now > nextNote) {
+    fx.note(W / 2 + posX + (Math.random() - 0.5) * 80, petBox[1] + 10);
+    nextNote = now + 380;
+  }
+  if (working && Math.random() < dt * 0.8) fx.sparkle(W / 2 + posX, petBox[1] + 10, 2, "#9fe6ff");
 
   if (anim) {
     const p = (now - anim.t0) / anim.dur;
@@ -536,48 +516,22 @@ function frameInner(now: number) {
       anim = null;
     } else {
       switch (anim.name) {
-        case "attack": {
+        case "attack":
+        case "happy":
+        case "poke":
+        case "hurt":
+        case "dizzy":
+        case "alert": {
           const dir = flip ? -1 : 1;
-          if (p < 0.25) {
-            dx -= dir * p * 24;
-            sx = 1 + p * 0.3;
-            sy = 1 - p * 0.3;
-          } else if (p < 0.45) {
-            pose = "attack";
-            dx += dir * ((p - 0.25) / 0.2) * 18;
-            if (!anim.fired) {
-              anim.fired = true;
-              fx.attack(mon.fx, W / 2 + posX + dir * box.w * 0.42, GROUND - box.h * 0.62, dir);
-            }
-          } else {
-            if (p < 0.8) pose = "attack";
-            dx += dir * (1 - (p - 0.45) / 0.55) * 18;
+          look = compose(baseLook, shot(anim.name as Shot, p, dir));
+          if (look.fire && !anim.fired && anim.name === "attack") {
+            anim.fired = true;
+            fx.attack(mon.fx, W / 2 + posX + look.dx + dir * box.w * 0.42, GROUND - box.h * 0.62, dir);
+            fx.shake = Math.max(fx.shake, 0.35);
           }
+          if (anim.name === "dizzy" && Math.random() < 0.2) fx.sparkle(W / 2 + posX, petBox[1], 1, "#ffe066");
           break;
         }
-        case "happy":
-          dy = -Math.abs(Math.sin(p * Math.PI * 2)) * 16;
-          if (dy < -6) pose = "attack";
-          break;
-        case "poke":
-          if (p < 0.6) pose = "hit";
-          sx = 1 + Math.sin(p * Math.PI) * 0.18;
-          sy = 1 - Math.sin(p * Math.PI) * 0.18;
-          break;
-        case "hurt":
-          pose = "hit";
-          dx += Math.sin(p * 60) * 4;
-          red = 0.5 * (1 - p);
-          break;
-        case "dizzy":
-          pose = "hit";
-          rot = Math.sin(p * 30) * 0.25;
-          if (Math.random() < 0.2) fx.sparkle(W / 2 + posX, petBox[1], 1, "#ffe066");
-          break;
-        case "alert":
-          pose = "attack";
-          dy = -Math.abs(Math.sin(p * Math.PI * 2)) * 12;
-          break;
         case "hatch":
           rot = Math.sin(p * 40) * 0.12 * Math.min(1, p * 2);
           white = p > 0.7 ? (p - 0.7) / 0.3 : 0;
@@ -611,12 +565,27 @@ function frameInner(now: number) {
   g.clearRect(0, 0, W, H);
   g.save();
   if (fx.shake > 0) g.translate((Math.random() - 0.5) * fx.shake * 10, (Math.random() - 0.5) * fx.shake * 6);
-  const x = W / 2 + posX + dx;
+  white = Math.max(white, look.white);
+  red = Math.max(red, look.red);
+  rot += look.rot;
+  const x = W / 2 + posX + look.dx;
   const dScale = scaleOf(drawId);
   const dBox = monBox(drawId, dScale);
   g.fillStyle = "rgba(0,0,0,0.22)";
   g.fillRect(Math.round(x - dBox.w * 0.3), GROUND - 2, Math.round(dBox.w * 0.6), 4);
-  petBox = drawMon(g, drawId, { x, y: GROUND + dy, scale: dScale, pose, step: walkStep, facing: flip ? -1 : 1, sx, sy, rot, white, red });
+  petBox = drawMon(g, drawId, {
+    x,
+    y: GROUND + look.dy,
+    scale: dScale,
+    pose: look.pose,
+    step: look.step,
+    breath: look.breath,
+    ghosts: look.ghosts.map((gx) => gx * dScale),
+    facing: flip ? -1 : 1,
+    rot,
+    white,
+    red,
+  });
   if (bubble.busy && !anim) {
     drawGrid(g, EXCLAIM, x + dBox.w * 0.3, petBox[1] - 26 + Math.sin(t * 8) * 3, 3, "#ffd23f");
   }
