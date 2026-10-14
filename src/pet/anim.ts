@@ -16,6 +16,8 @@ export interface Look {
   step: number;
   /** Quadro de respiração: 0 (solto) … 2 (peito cheio). */
   breath: number;
+  /** Relógio do idle do jogo (um quadro a cada ~150 ms, como no DS). */
+  cycle: number;
   dx: number;
   dy: number;
   rot: number;
@@ -45,11 +47,12 @@ const arc = (x: number) => 4 * clamp01(x) * (1 - clamp01(x));
 /** Ciclo de respiração, como um sprite de 4 quadros a ~180 ms. */
 const breathAt = (t: number, period = 0.18) => [0, 1, 2, 1][Math.floor(t / period) % 4];
 
-const blank = (): Look => ({ pose: "idle", step: 0, breath: 0, dx: 0, dy: 0, rot: 0, red: 0, white: 0, flip: null, ghosts: [], fire: false });
+const blank = (): Look => ({ pose: "idle", step: 0, breath: 0, cycle: 0, dx: 0, dy: 0, rot: 0, red: 0, white: 0, flip: null, ghosts: [], fire: false });
 
 /** O movimento contínuo (o que ele está fazendo quando nada especial acontece). */
 export function base(mode: Base, t: number, walked: number): Look {
   const l = blank();
+  l.cycle = Math.floor(t / 0.15);
   switch (mode) {
     case "idle":
       l.breath = breathAt(t);

@@ -15,8 +15,11 @@ interface Frame {
   h: number;
   /** Ciclo de passos gerado a partir da pose parada (só nela). */
   walk?: HTMLCanvasElement[];
-  /** Respiração: [solto, -1 px, -2 px] — a cabeça e o tronco descem e sobem. */
+  /** Respiração gerada (só quando não há o idle do jogo). */
   breath?: HTMLCanvasElement[];
+  /** Idle do jogo (folhas do DS): os quadros e o deslocamento de cada um em
+   *  relação ao primeiro, para não tremer entre quadros. */
+  cycle?: { canvas: HTMLCanvasElement; ox: number; oy: number }[];
 }
 
 /** Para onde o sprite olha no arquivo (1 = direita) e redução de arte ampliada. */
@@ -162,12 +165,56 @@ function makeBreath(src: HTMLCanvasElement): HTMLCanvasElement[] {
   });
 }
 
+/**
+ * Onde o quadro `b` se encaixa sobre `a`: o deslocamento (±8 px) com mais
+ * pixels iguais entre os dois, medido pelos pés para cima (base alinhada).
+ */
+function bestOffset(a: HTMLCanvasElement, b: HTMLCanvasElement): [number, number] {
+  const ga = a.getContext("2d", { willReadFrequently: true })!.getImageData(0, 0, a.width, a.height).data;
+  const gb = b.getContext("2d", { willReadFrequently: true })!.getImageData(0, 0, b.width, b.height).data;
+  let best: [number, number] = [0, 0];
+  let bestScore = -1;
+  const baseY = a.height - b.height; // base com base
+  const baseX = Math.round((a.width - b.width) / 2);
+  for (let dy = -8; dy <= 8; dy++)
+    for (let dx = -8; dx <= 8; dx++) {
+      let score = 0;
+      for (let y = 0; y < b.height; y += 2)
+        for (let x = 0; x < b.width; x += 2) {
+          const ax = x + baseX + dx, ay = y + baseY + dy;
+          if (ax < 0 || ay < 0 || ax >= a.width || ay >= a.height) continue;
+          const ib = (y * b.width + x) * 4, ia = (ay * a.width + ax) * 4;
+          if (gb[ib + 3] < 128 || ga[ia + 3] < 128) continue;
+          if (Math.abs(ga[ia] - gb[ib]) + Math.abs(ga[ia + 1] - gb[ib + 1]) + Math.abs(ga[ia + 2] - gb[ib + 2]) < 24) score++;
+        }
+      if (score > bestScore) {
+        bestScore = score;
+        best = [baseX + dx, baseY + dy];
+      }
+    }
+  return best;
+}
+
 /** Carrega os pacotes vindos do backend (`id` ou `id/pose` → data URL). */
 export async function loadPacks(map: Record<string, string>) {
   packs.clear();
+  const cycles = new Map<string, { n: number; frame: Frame }[]>();
   await Promise.all(
     Object.entries(map).map(async ([key, url]) => {
-      const [id, pose = "idle"] = key.split("/");
+      const [id, rawPose = "idle"] = key.split("/");
+      const m = /^idle_(\d+)$/.exec(rawPose);
+      if (m) {
+        try {
+          const frame = await processFrame(url, PACK_INFO[id]?.down ?? 1);
+          const list = cycles.get(id) ?? [];
+          list.push({ n: Number(m[1]), frame });
+          cycles.set(id, list);
+        } catch {
+          /* quadro inválido: ignora */
+        }
+        return;
+      }
+      const pose = rawPose;
       if (!["idle", "attack", "hit"].includes(pose)) return;
       try {
         const frame = await processFrame(url, PACK_INFO[id]?.down ?? 1);
@@ -181,6 +228,22 @@ export async function loadPacks(map: Record<string, string>) {
       }
     }),
   );
+  // o idle do jogo: o quadro 0 vira a pose parada, e cada quadro é alinhado a ele
+  for (const [id, list] of cycles) {
+    list.sort((a, b) => a.n - b.n);
+    if (list.length < 2) continue;
+    const first = list[0].frame;
+    const entry = packs.get(id) ?? {};
+    const idle = entry.idle ?? first;
+    // a pose parada passa a ser o quadro 0 (mesma arte da folha)
+    entry.idle = { ...first, walk: makeWalk(first.normal) };
+    entry.idle.cycle = list.map(({ frame }, i) => {
+      const [ox, oy] = i === 0 ? [0, 0] : bestOffset(first.normal, frame.normal);
+      return { canvas: frame.normal, ox, oy };
+    });
+    void idle;
+    packs.set(id, entry);
+  }
 }
 
 export function hasPack(id: string) {
@@ -239,6 +302,8 @@ export interface DrawOpts {
   step?: number;
   /** Quadro de respiração (0..2). */
   breath?: number;
+  /** Tempo do idle do jogo (índice de quadro que cresce sempre). */
+  cycle?: number;
   /** Rastro: deslocamentos de cópias fantasmas (px, no sentido do mundo). */
   ghosts?: number[];
   /** Para onde deve olhar: 1 direita, -1 esquerda. */
@@ -258,12 +323,21 @@ export function drawMon(g: CanvasRenderingContext2D, id: string, o: DrawOpts): [
   const flip = (o.facing ?? native) !== native;
   const w = f.w * o.scale, h = f.h * o.scale;
   const sx = o.sx ?? 1, sy = o.sy ?? 1;
-  const body =
-    o.pose === "walk" && f.walk
-      ? f.walk[(o.step ?? 0) % f.walk.length]
-      : f.breath && o.breath
-        ? f.breath[Math.max(0, Math.min(f.breath.length - 1, o.breath))]
-        : f.normal;
+  // idle do jogo: vai e volta pelos quadros (0,1,2,1,…), cada um no seu encaixe
+  let ox = 0, oy = 0;
+  let body: HTMLCanvasElement = f.normal;
+  if ((o.pose ?? "idle") === "idle" && f.cycle && o.cycle != null) {
+    const n = f.cycle.length;
+    const seq = [...Array(n).keys(), ...Array.from({ length: n - 2 }, (_, i) => n - 2 - i)];
+    const c = f.cycle[seq[((o.cycle % seq.length) + seq.length) % seq.length]];
+    body = c.canvas;
+    ox = c.ox;
+    oy = c.oy;
+  } else if (o.pose === "walk" && f.walk) {
+    body = f.walk[(o.step ?? 0) % f.walk.length];
+  } else if (f.breath && o.breath) {
+    body = f.breath[Math.max(0, Math.min(f.breath.length - 1, o.breath))];
+  }
   // rastro: cópias translúcidas atrás, as mais distantes mais apagadas
   (o.ghosts ?? []).forEach((gx, i) => {
     g.save();
@@ -280,9 +354,14 @@ export function drawMon(g: CanvasRenderingContext2D, id: string, o: DrawOpts): [
   g.translate(Math.round(o.x), Math.round(o.y));
   if (o.rot) g.rotate(o.rot);
   g.scale((flip ? -1 : 1) * sx, sy);
-  // cada quadro com o próprio tamanho (os de respiração são um pouco mais altos)
+  // cada quadro com o próprio tamanho (os de respiração são um pouco mais altos);
+  // os do idle do jogo entram no encaixe calculado em relação ao quadro 0
   const bw = body.width * o.scale, bh = body.height * o.scale;
-  g.drawImage(body, -Math.round(bw / 2), -bh, bw, bh);
+  if (f.cycle && body !== f.normal && (o.pose ?? "idle") === "idle") {
+    g.drawImage(body, -Math.round(w / 2) + ox * o.scale, -h + oy * o.scale, bw, bh);
+  } else {
+    g.drawImage(body, -Math.round(bw / 2), -bh, bw, bh);
+  }
   if (o.white) {
     g.globalAlpha = (o.alpha ?? 1) * Math.min(1, o.white);
     g.drawImage(f.white, -Math.round(w / 2), -h, w, h);

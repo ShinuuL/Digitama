@@ -22,7 +22,7 @@ const rows: { label: string; look: (t: number) => ReturnType<typeof base> }[] = 
 ];
 
 async function main() {
-  const poses = ["idle", "attack", "hit"];
+  const poses = ["idle", "attack", "hit", "idle_0", "idle_1", "idle_2", "idle_3"];
   const map: Record<string, string> = {};
   for (const p of poses) map[`${id}/${p}`] = `/__sprites/${id}/${p}.png`;
   await loadPacks(map);
@@ -45,7 +45,7 @@ async function main() {
       g.fillRect(70 + i * cw, r * ch, cw, ch);
       g.fillStyle = "rgba(0,0,0,.3)";
       g.fillRect(x - box.w * 0.3, y - 2, box.w * 0.6, 3);
-      drawMon(g, id, { x: x + l.dx, y: y + l.dy, scale, pose: l.pose, step: l.step, breath: l.breath, ghosts: l.ghosts, rot: l.rot, white: l.white, red: l.red, facing: l.flip === null ? 1 : l.flip ? -1 : 1 });
+      drawMon(g, id, { x: x + l.dx, y: y + l.dy, scale, pose: l.pose, step: l.step, breath: l.breath, cycle: l.cycle, ghosts: l.ghosts, rot: l.rot, white: l.white, red: l.red, facing: l.flip === null ? 1 : l.flip ? -1 : 1 });
       if (l.fire) { g.fillStyle = "#ffd23f"; g.fillRect(70 + i * cw + 2, r * ch + 2, 6, 6); }
     }
   });

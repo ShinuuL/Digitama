@@ -580,6 +580,7 @@ function frameInner(now: number) {
     pose: look.pose,
     step: look.step,
     breath: look.breath,
+    cycle: look.cycle,
     ghosts: look.ghosts.map((gx) => gx * dScale),
     facing: flip ? -1 : 1,
     rot,
