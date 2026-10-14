@@ -47,6 +47,8 @@ pub struct PetState {
     pub opencode_model: String,
     /// Já passou pelos "Primeiros passos" do Digivice.
     pub onboarded: bool,
+    /// A cada quantos minutos consultar o uso do Claude (0 = não consultar).
+    pub usage_refresh_min: u32,
 }
 
 impl Default for PetState {
@@ -73,6 +75,7 @@ impl Default for PetState {
             opencode_path: String::new(),
             opencode_model: String::new(),
             onboarded: false,
+            usage_refresh_min: 10,
         }
     }
 }

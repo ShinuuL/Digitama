@@ -449,6 +449,32 @@ fn hooks_apply(app: AppHandle, install: bool, fingerprint: String) -> Result<Str
     hooks_install::apply(install, &hook_exe_path(&app).to_string_lossy(), &fingerprint)
 }
 
+/// Consulta o uso do Claude de tempos em tempos (Digivice → Agentes).
+fn start_usage_poll(app: AppHandle) {
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_secs(20));
+        loop {
+            let minutes = app.state::<Store>().get().usage_refresh_min;
+            if minutes > 0 {
+                refresh_usage(&app);
+            }
+            std::thread::sleep(Duration::from_secs(60 * u64::from(minutes.max(1))));
+        }
+    });
+}
+
+fn refresh_usage(app: &AppHandle) -> Option<Value> {
+    let u = claude::poll_usage(app)?;
+    *app.state::<pipe::Usage>().0.lock().unwrap() = Some(u.clone());
+    let _ = app.emit("usage", u.clone());
+    Some(u)
+}
+
+#[tauri::command]
+async fn usage_refresh(app: AppHandle) -> Option<Value> {
+    tauri::async_runtime::spawn_blocking(move || refresh_usage(&app)).await.ok().flatten()
+}
+
 #[tauri::command]
 fn usage_get(usage: State<pipe::Usage>) -> Option<Value> {
     usage.0.lock().unwrap().clone()
@@ -733,6 +759,7 @@ pub fn run() {
             place_pet(&handle);
             pipe::start(handle.clone());
             media::start(handle.clone());
+            start_usage_poll(handle.clone());
             start_hit_poll(handle.clone());
             if let Err(e) = build_tray(&handle) {
                 eprintln!("[digitama] bandeja: {e}");
@@ -802,6 +829,7 @@ pub fn run() {
             mcp_install,
             custom_sprites,
             usage_get,
+            usage_refresh,
             usage_bar_status,
             usage_bar_preview,
             usage_bar_apply,

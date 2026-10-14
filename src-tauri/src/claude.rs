@@ -344,6 +344,62 @@ pub fn reset(app: &AppHandle) {
     inner.oc_persona = None;
 }
 
+/// Consulta o uso do plano: uma chamada mínima (Haiku, prompt de sistema curto,
+/// sem ferramentas, sem MCP, sem configurações do usuário) só para receber o
+/// `rate_limit_event`. Custa ~1–2 mil tokens do Haiku.
+pub fn poll_usage(app: &AppHandle) -> Option<Value> {
+    let s = app.state::<Store>().get();
+    let exe = find_claude(&s.claude_path)?;
+    let dir = app.state::<Store>().data_dir().join("usage");
+    let _ = std::fs::create_dir_all(&dir);
+    let mut cmd = Command::new(exe);
+    cmd.args([
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--model",
+        "haiku",
+        "--system-prompt",
+        "Responda apenas: ok",
+        "--tools",
+        "",
+        "--strict-mcp-config",
+        "--setting-sources",
+        "",
+    ])
+    .current_dir(&dir)
+    .env("DIGITAMA_INTERNAL", "1")
+    .stdin(Stdio::piped())
+    .stdout(Stdio::piped())
+    .stderr(Stdio::null())
+    .creation_flags(CREATE_NO_WINDOW);
+    if s.force_oauth {
+        cmd.env_remove("ANTHROPIC_API_KEY").env_remove("ANTHROPIC_AUTH_TOKEN");
+    }
+    let mut child = cmd.spawn().ok()?;
+    if let Some(mut stdin) = child.stdin.take() {
+        let _ = stdin.write_all(b"ok");
+    }
+    let stdout = child.stdout.take()?;
+    let mut found = None;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+        if let Ok(v) = serde_json::from_str::<Value>(&line) {
+            if let Some(u) = usage_from_event(&v) {
+                found = Some(u);
+                break;
+            }
+        }
+        if std::time::Instant::now() > deadline {
+            break;
+        }
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+    found
+}
+
 /// Roda o claude.exe com argumentos fixos (sem shell) e devolve stdout+stderr.
 pub fn run_cli(custom: &str, args: &[&str]) -> Result<String, String> {
     let exe = find_claude(custom).ok_or("claude.exe não encontrado")?;

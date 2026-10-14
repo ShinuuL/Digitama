@@ -137,21 +137,27 @@ function makeWalk(src: HTMLCanvasElement): HTMLCanvasElement[] {
 }
 
 /**
- * Respiração em quadros, como num sprite de jogo: a parte de cima (acima de
- * ~55% da altura) desce 1 e 2 px sobre a de baixo; pés e base ficam parados.
- * Sprites pequenos só descem 1 px, para não "derreter".
+ * Respiração em quadros, como os spritistas fazem: o tronco *estica* 1–2 px.
+ * A parte de cima sobe e a linha de junção se repete no vão — nenhum pixel do
+ * desenho é apagado ou sobreposto. Os quadros têm 2 px a mais de altura (em
+ * cima); o desenho continua apoiado pelos pés.
  */
+const BREATH_PAD = 2;
 function makeBreath(src: HTMLCanvasElement): HTMLCanvasElement[] {
   const w = src.width, h = src.height;
-  const split = Math.round(h * 0.55);
+  const split = Math.round(h * 0.6);
   const offsets = [0, 1, h >= 80 ? 2 : 1];
   return offsets.map((k) => {
-    if (k === 0) return src;
-    const c = canvas(w, h);
+    const c = canvas(w, h + BREATH_PAD);
     const g = c.getContext("2d")!;
     g.imageSmoothingEnabled = false;
-    g.drawImage(src, 0, split, w, h - split, 0, split, w, h - split);
-    g.drawImage(src, 0, 0, w, split, 0, k, w, split);
+    const top = BREATH_PAD - k;
+    // de baixo: fica onde está
+    g.drawImage(src, 0, split, w, h - split, 0, BREATH_PAD + split, w, h - split);
+    // de cima: sobe k px
+    g.drawImage(src, 0, 0, w, split, 0, top, w, split);
+    // o vão de k linhas repete a última linha da parte de cima
+    for (let i = 0; i < k; i++) g.drawImage(src, 0, split - 1, w, 1, 0, top + split + i, w, 1);
     return c;
   });
 }
@@ -265,7 +271,7 @@ export function drawMon(g: CanvasRenderingContext2D, id: string, o: DrawOpts): [
     g.globalAlpha = (o.alpha ?? 1) * (0.42 - i * 0.12);
     g.translate(Math.round(o.x + gx), Math.round(o.y));
     g.scale(flip ? -1 : 1, 1);
-    g.drawImage(body, -Math.round(w / 2), -h, w, h);
+    g.drawImage(body, -Math.round((body.width * o.scale) / 2), -body.height * o.scale, body.width * o.scale, body.height * o.scale);
     g.restore();
   });
   g.save();
@@ -274,7 +280,9 @@ export function drawMon(g: CanvasRenderingContext2D, id: string, o: DrawOpts): [
   g.translate(Math.round(o.x), Math.round(o.y));
   if (o.rot) g.rotate(o.rot);
   g.scale((flip ? -1 : 1) * sx, sy);
-  g.drawImage(body, -Math.round(w / 2), -h, w, h);
+  // cada quadro com o próprio tamanho (os de respiração são um pouco mais altos)
+  const bw = body.width * o.scale, bh = body.height * o.scale;
+  g.drawImage(body, -Math.round(bw / 2), -bh, bw, bh);
   if (o.white) {
     g.globalAlpha = (o.alpha ?? 1) * Math.min(1, o.white);
     g.drawImage(f.white, -Math.round(w / 2), -h, w, h);

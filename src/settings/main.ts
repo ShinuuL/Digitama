@@ -119,8 +119,13 @@ $("#pages").innerHTML = `
     <p class="muted">Backup datado do settings.json antes de gravar. Hooks de outras ferramentas (como o coucou) não são tocados. Com o Digitama fechado, o Claude Code segue normal.</p>
   </div>
   <div class="dv-panel">
-    <div class="dv-label">Claude Code — uso do plano</div>
+    <div class="dv-label">Claude Code — uso do plano (barra de status, só no terminal)</div>
     <div id="usagebox"></div>
+    <div class="row">
+      <label class="check">Consultar a cada <select id="usagemin"><option value="0">nunca</option><option value="5">5 min</option><option value="10">10 min</option><option value="15">15 min</option><option value="30">30 min</option><option value="60">1 hora</option></select></label>
+      <button class="dv-btn" id="usagenow">Atualizar agora</button>
+    </div>
+    <p class="muted">Cada consulta é uma chamada mínima ao Claude Code (Haiku, sem ferramentas): ~1–2 mil tokens. Funciona também com a extensão do VS Code.</p>
     <p id="usagestatus" class="muted">…</p>
     <div class="row"><button class="dv-btn go" id="usageinstall">Ver prévia e ativar</button><button class="dv-btn" id="usageremove">Ver prévia e desativar</button></div>
     <div id="usagepreview" class="hidden">
@@ -304,6 +309,7 @@ function render() {
   $<HTMLInputElement>("#persona").checked = state.personaChat;
   $<HTMLInputElement>("#oauth").checked = state.forceOauth;
   $<HTMLInputElement>("#prtsc").checked = state.printScreenKey;
+  $<HTMLSelectElement>("#usagemin").value = String(state.usageRefreshMin);
   $<HTMLSelectElement>("#provider").value = state.chatProvider;
   $<HTMLInputElement>("#ocpath").value = state.opencodePath;
   $<HTMLInputElement>("#ocmodel").value = state.opencodeModel;
@@ -431,6 +437,16 @@ async function usagePreview(install: boolean) {
     alert(String(e));
   }
 }
+$<HTMLSelectElement>("#usagemin").onchange = (e) => save({ usageRefreshMin: Number((e.target as HTMLSelectElement).value) });
+$("#usagenow").onclick = async () => {
+  $("#usagenow").textContent = "consultando…";
+  try {
+    const u = await api.usageRefresh();
+    if (!u) alert("Não veio o uso: o Claude Code está logado com uma assinatura (Pro/Max)?");
+  } finally {
+    $("#usagenow").textContent = "Atualizar agora";
+  }
+};
 $("#usageinstall").onclick = () => void usagePreview(true);
 $("#usageremove").onclick = () => void usagePreview(false);
 $("#usagecancel").onclick = () => $("#usagepreview").classList.add("hidden");

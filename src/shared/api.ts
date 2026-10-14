@@ -21,6 +21,7 @@ export interface PetState {
   opencodePath: string;
   opencodeModel: string;
   onboarded: boolean;
+  usageRefreshMin: number;
   pos: [number, number] | null;
   tasksDone: number;
   questionsAnswered: number;
@@ -88,6 +89,7 @@ export const api = {
   petVisibility: (visible?: boolean) => invoke("pet_visibility", { visible: visible ?? null }),
   quit: () => invoke("quit"),
   usageGet: () => invoke<Usage | null>("usage_get"),
+  usageRefresh: () => invoke<Usage | null>("usage_refresh"),
   usageBarStatus: () => invoke<boolean>("usage_bar_status"),
   usageBarPreview: (install: boolean) =>
     invoke<{ diff: string; settingsPath: string; fingerprint: string; changes: boolean }>("usage_bar_preview", { install }),
