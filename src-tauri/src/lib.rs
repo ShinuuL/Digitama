@@ -82,6 +82,25 @@ fn ensure_hook_exe(app: &AppHandle) {
     }
 }
 
+/// Copia os sprites que vieram no instalador para a pasta do usuário — só o que
+/// ainda não existe lá, para nunca sobrescrever um sprite trocado à mão.
+fn install_bundled_sprites(app: &AppHandle) {
+    let Ok(src) = app.path().resolve("sprites", tauri::path::BaseDirectory::Resource) else { return };
+    let Ok(ids) = std::fs::read_dir(&src) else { return };
+    let dest = sprites_dir(app);
+    for id in ids.flatten().filter(|e| e.path().is_dir()) {
+        let target = dest.join(id.file_name());
+        let _ = std::fs::create_dir_all(&target);
+        let Ok(files) = std::fs::read_dir(id.path()) else { continue };
+        for f in files.flatten() {
+            let to = target.join(f.file_name());
+            if !to.exists() {
+                let _ = std::fs::copy(f.path(), &to);
+            }
+        }
+    }
+}
+
 // ── Janelas ──────────────────────────────────────────────────────────────────
 
 fn open_window_impl(app: &AppHandle, name: &str) {
@@ -769,6 +788,7 @@ pub fn run() {
             if !handle.state::<Store>().get().onboarded {
                 open_window_later(&handle, "settings");
             }
+            install_bundled_sprites(&handle);
             if sprites::missing(&sprites_dir(&handle)) > 0 {
                 let app = handle.clone();
                 tauri::async_runtime::spawn(async move {
