@@ -363,3 +363,85 @@ pre .del {
   color: var(--dv-gold);
   align-self: center;
 }
+
+/* ── Primeiros passos ──────────────────────────────────────────────────────── */
+
+.checklist {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 10px 0;
+}
+.check-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 10px;
+  background: rgba(3, 10, 42, 0.5);
+  box-shadow: inset 0 0 0 2px rgba(63, 224, 255, 0.25);
+}
+.check-row > div {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+.check-row b {
+  font: 10px var(--dv-title);
+  color: var(--dv-ice);
+}
+.dot {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  background: #5a6890;
+  box-shadow: 0 0 0 2px var(--dv-dark);
+}
+.dot.half {
+  background: var(--dv-gold);
+  box-shadow: 0 0 0 2px var(--dv-dark), 0 0 10px rgba(255, 210, 63, 0.6);
+}
+.dot.on {
+  background: var(--dv-green);
+  box-shadow: 0 0 0 2px var(--dv-dark), 0 0 10px rgba(61, 255, 138, 0.6);
+}
+#sprites-bar,
+#sprites-bar-start {
+  margin: 8px 0;
+}
+
+/* ── Uso do Claude ─────────────────────────────────────────────────────────── */
+
+.usage {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 4px 0;
+}
+.usage-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.usage-label {
+  width: 60px;
+  font: 8px var(--dv-title);
+  color: #1450c8;
+}
+#usagebox .usage-label {
+  color: var(--dv-cyan);
+}
+.usage-row .dv-bar {
+  flex: 1;
+}
+.usage-val {
+  width: 44px;
+  text-align: right;
+}
+.usage-reset,
+.usage-empty {
+  font-size: 16px;
+  opacity: 0.75;
+}
+.dv-bar.danger > i {
+  background: repeating-linear-gradient(90deg, #ff4d5e 0 6px, #ff9aa4 6px 8px);
+}

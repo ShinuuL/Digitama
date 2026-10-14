@@ -42,6 +42,10 @@ pub enum Reply {
 #[derive(Default)]
 pub struct Pending(pub Mutex<HashMap<String, mpsc::Sender<Reply>>>);
 
+/// Os últimos limites do plano do Claude (`rate_limits` da barra de status).
+#[derive(Default)]
+pub struct Usage(pub Mutex<Option<Value>>);
+
 static COUNTER: AtomicU64 = AtomicU64::new(1);
 
 pub fn pipe_name() -> String {
@@ -116,6 +120,15 @@ async fn handle(app: AppHandle, mut pipe: NamedPipeServer) {
     }
 
     let event = payload.get("hook_event_name").and_then(Value::as_str).unwrap_or_default().to_string();
+    if event == "StatusLine" {
+        // uso do plano do Claude (vem da barra de status): guarda e avisa as janelas
+        if let Some(limits) = payload.get("rate_limits").cloned() {
+            *app.state::<Usage>().0.lock().unwrap() = Some(limits.clone());
+            let _ = app.emit("usage", limits);
+        }
+        let _ = pipe.disconnect();
+        return;
+    }
     if event != "PermissionRequest" {
         let _ = app.emit_to("pet", "hook", payload);
         let _ = pipe.disconnect();
@@ -181,6 +194,7 @@ async fn serve_rpc(app: &AppHandle, rpc: &str, payload: &Value) -> Value {
                 "estagio": s.current_stage,
                 "xp": s.xp,
                 "tarefas_concluidas": s.tasks_done,
+                "uso_claude": app.state::<Usage>().0.lock().unwrap().clone(),
             })
         }
         other => json!({ "ok": false, "error": format!("rpc desconhecido: {other}") }),

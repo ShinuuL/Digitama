@@ -39,6 +39,14 @@ pub struct PetState {
     pub questions_answered: u64,
     /// A tecla Print Screen abre o recorte (como o Lightshot). Vale ao reabrir.
     pub print_screen_key: bool,
+    /// Quem responde no chat: "claude" (Claude Code) ou "opencode".
+    pub chat_provider: String,
+    /// Caminho do opencode.exe; vazio = detectar.
+    pub opencode_path: String,
+    /// Modelo do OpenCode (`provedor/modelo`); vazio = o padrão dele.
+    pub opencode_model: String,
+    /// Já passou pelos "Primeiros passos" do Digivice.
+    pub onboarded: bool,
 }
 
 impl Default for PetState {
@@ -61,6 +69,10 @@ impl Default for PetState {
             tasks_done: 0,
             questions_answered: 0,
             print_screen_key: true,
+            chat_provider: "claude".into(),
+            opencode_path: String::new(),
+            opencode_model: String::new(),
+            onboarded: false,
         }
     }
 }

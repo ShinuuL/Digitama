@@ -6,6 +6,17 @@
 
 use serde_json::{json, Map, Value};
 
+/// O que imprimir para `agent` dada a decisão do balão. O Claude Code lê o JSON
+/// documentado; o plugin do OpenCode lê só a palavra (`allow`/`deny`) e responde
+/// pela API do próprio OpenCode.
+pub fn stdout_for(agent: &str, decision: &str, question: Option<&Value>) -> Option<String> {
+    match agent {
+        "" | "claude" => decision_json(decision, question),
+        "opencode" => matches!(decision.trim(), "allow" | "deny").then(|| decision.trim().to_string()),
+        _ => None,
+    }
+}
+
 /// A saída documentada do PermissionRequest (https://code.claude.com/docs/en/hooks).
 /// `question` é o input do AskUserQuestion quando é isso que foi perguntado: o
 /// balão responde devolvendo o mesmo input com o mapa `answers`.
@@ -69,6 +80,14 @@ fn answers_fit(question: &Value, answers: &Map<String, Value>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cada_agente_recebe_o_seu_formato() {
+        assert!(stdout_for("", "allow", None).unwrap().contains("hookSpecificOutput"));
+        assert_eq!(stdout_for("opencode", "deny", None).as_deref(), Some("deny"));
+        assert!(stdout_for("opencode", r#"{"answers":{}}"#, None).is_none());
+        assert!(stdout_for("codex", "allow", None).is_none());
+    }
 
     #[test]
     fn so_allow_e_deny_viram_decisao() {

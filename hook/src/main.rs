@@ -23,6 +23,7 @@ use std::time::Duration;
 use serde_json::{json, Map, Value};
 
 mod reply;
+mod statusline;
 #[cfg(windows)]
 mod win;
 #[cfg(windows)]
@@ -48,16 +49,19 @@ const MAX_FIELD_LEN: usize = 2_000;
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.iter().any(|a| a == "--statusline") {
+        statusline::run();
+    }
     if args.iter().any(|a| a == "--mcp") {
         mcp::run();
         return;
     }
-    let event_arg = args.iter().find(|a| !a.starts_with("--")).cloned().unwrap_or_default();
+    let (agent, event_arg) = parse_args(&args);
 
     let mut raw = Vec::new();
     let _ = std::io::stdin().read_to_end(&mut raw);
 
-    let Some(event) = prepare(&raw, &event_arg) else {
+    let Some(event) = prepare(&raw, &event_arg, &agent) else {
         std::process::exit(0);
     };
 
@@ -72,13 +76,28 @@ fn main() {
 
     let decision = rx.recv_timeout(budget).ok().flatten();
     if waits {
-        if let Some(out) = decision.and_then(|d| reply::decision_json(&d, event.question.as_ref())) {
+        if let Some(out) = decision.and_then(|d| reply::stdout_for(&agent, &d, event.question.as_ref())) {
             let mut stdout = std::io::stdout();
             let _ = writeln!(stdout, "{out}");
             let _ = stdout.flush();
         }
     }
     std::process::exit(0);
+}
+
+/// `[--agent <nome>] [<Evento>]`. Sem `--agent`, é o Claude Code.
+fn parse_args(args: &[String]) -> (String, String) {
+    let mut agent = String::new();
+    let mut event = String::new();
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        if a == "--agent" {
+            agent = it.next().cloned().unwrap_or_default().to_lowercase();
+        } else if !a.starts_with("--") && event.is_empty() {
+            event = a.clone();
+        }
+    }
+    (agent, event)
 }
 
 struct Event {
@@ -88,7 +107,7 @@ struct Event {
     question: Option<Value>,
 }
 
-fn prepare(raw: &[u8], event_arg: &str) -> Option<Event> {
+fn prepare(raw: &[u8], event_arg: &str, agent: &str) -> Option<Event> {
     let raw = raw.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(raw);
     let mut payload = serde_json::from_slice::<Value>(raw).ok()?;
     let map = payload.as_object_mut()?;
@@ -109,6 +128,9 @@ fn prepare(raw: &[u8], event_arg: &str) -> Option<Event> {
             map.insert("cwd".into(), Value::String(cwd.to_string_lossy().into_owned()));
         }
     }
+    // Qual agente mandou: vazio é o Claude Code (o pet mostra o nome no balão).
+    let agent = if agent.is_empty() { "claude" } else { agent };
+    map.insert("digitama_agent".into(), Value::String(agent.to_string()));
     // Sessões abertas pelo próprio chat do Digitama: o pet não comemora a si mesmo.
     if std::env::var("DIGITAMA_INTERNAL").is_ok_and(|v| v == "1") {
         map.insert("digitama_internal".into(), Value::Bool(true));
@@ -119,7 +141,7 @@ fn prepare(raw: &[u8], event_arg: &str) -> Option<Event> {
         }
     }
 
-    let question = (map.get("tool_name").and_then(Value::as_str) == Some("AskUserQuestion"))
+    let question = (agent == "claude" && map.get("tool_name").and_then(Value::as_str) == Some("AskUserQuestion"))
         .then(|| map.get("tool_input").cloned())
         .flatten();
 
@@ -129,7 +151,7 @@ fn prepare(raw: &[u8], event_arg: &str) -> Option<Event> {
     Some(Event { line, name, question })
 }
 
-fn truncate_strings(value: &mut Value) {
+pub(crate) fn truncate_strings(value: &mut Value) {
     match value {
         Value::String(s) => cut(s, MAX_FIELD_LEN),
         Value::Array(items) => items.iter_mut().for_each(truncate_strings),
@@ -151,7 +173,7 @@ fn cut(s: &mut String, max: usize) {
 }
 
 /// Conecta, envia e — se `waits` — espera uma linha de resposta.
-fn talk(payload: &str, waits: bool) -> Option<String> {
+pub(crate) fn talk(payload: &str, waits: bool) -> Option<String> {
     let mut pipe = connect()?;
     if pipe.write_all(payload.as_bytes()).is_err() {
         return None;
@@ -317,9 +339,10 @@ mod tests {
 
     #[test]
     fn um_payload_normal_passa_e_campos_pesados_somem() {
-        let ev = prepare(br#"{"hook_event_name":"Stop","cwd":"C:/p","tool_response":"x"}"#, "").unwrap();
+        let ev = prepare(br#"{"hook_event_name":"Stop","cwd":"C:/p","tool_response":"x"}"#, "", "").unwrap();
         let v: Value = serde_json::from_str(ev.line.trim()).unwrap();
         assert_eq!(ev.name, "Stop");
+        assert_eq!(v["digitama_agent"], "claude");
         assert!(v.get("tool_response").is_none());
         assert_eq!(v["cwd"], "C:/p");
     }
@@ -328,17 +351,31 @@ mod tests {
     fn a_pergunta_fica_inteira_so_para_ask_user_question() {
         let long = "x".repeat(3000);
         let raw = format!(r#"{{"hook_event_name":"PermissionRequest","tool_name":"AskUserQuestion","tool_input":{{"questions":[{{"question":"{long}"}}]}}}}"#);
-        let ev = prepare(raw.as_bytes(), "").unwrap();
+        let ev = prepare(raw.as_bytes(), "", "").unwrap();
         assert_eq!(ev.question.unwrap()["questions"][0]["question"].as_str().unwrap().len(), 3000);
-        let ev = prepare(br#"{"hook_event_name":"PermissionRequest","tool_name":"Bash"}"#, "").unwrap();
+        let ev = prepare(br#"{"hook_event_name":"PermissionRequest","tool_name":"Bash"}"#, "", "").unwrap();
+        assert!(ev.question.is_none());
+        // só o Claude Code tem AskUserQuestion
+        let ev = prepare(raw.as_bytes(), "", "opencode").unwrap();
         assert!(ev.question.is_none());
     }
 
     #[test]
     fn lixo_nao_e_repassado_e_bom_nao_atrapalha() {
-        assert!(prepare(b"nada", "").is_none());
+        assert!(prepare(b"nada", "", "").is_none());
         let mut bom = vec![0xEF, 0xBB, 0xBF];
         bom.extend_from_slice(br#"{"hook_event_name":"Stop"}"#);
-        assert!(prepare(&bom, "").is_some());
+        assert!(prepare(&bom, "", "").is_some());
+    }
+
+    #[test]
+    fn argumentos_com_e_sem_agente() {
+        let a = |v: &[&str]| parse_args(&v.iter().map(|s| s.to_string()).collect::<Vec<_>>());
+        assert_eq!(a(&["Stop"]), ("".into(), "Stop".into()));
+        assert_eq!(a(&["--agent", "OpenCode", "PermissionRequest"]), ("opencode".into(), "PermissionRequest".into()));
+        assert_eq!(a(&["--agent", "opencode"]), ("opencode".into(), "".into()));
+        let ev = prepare(br#"{"hook_event_name":"Stop"}"#, "", "opencode").unwrap();
+        let v: Value = serde_json::from_str(ev.line.trim()).unwrap();
+        assert_eq!(v["digitama_agent"], "opencode");
     }
 }

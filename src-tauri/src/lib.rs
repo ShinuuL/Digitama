@@ -5,8 +5,10 @@
 mod claude;
 mod hooks_install;
 mod media;
+mod opencode;
 mod pipe;
 mod screen;
+mod sprites;
 mod store;
 mod winsys;
 
@@ -18,6 +20,7 @@ use serde_json::{json, Map, Value};
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, State, WebviewUrl, WebviewWindowBuilder};
+use tauri_plugin_autostart::ManagerExt;
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 
 use store::{PetState, Store};
@@ -447,6 +450,26 @@ fn hooks_apply(app: AppHandle, install: bool, fingerprint: String) -> Result<Str
 }
 
 #[tauri::command]
+fn usage_get(usage: State<pipe::Usage>) -> Option<Value> {
+    usage.0.lock().unwrap().clone()
+}
+
+#[tauri::command]
+fn usage_bar_status(app: AppHandle) -> bool {
+    hooks_install::status_line_installed(&hook_exe_path(&app).to_string_lossy())
+}
+
+#[tauri::command]
+fn usage_bar_preview(app: AppHandle, install: bool) -> Result<hooks_install::HookPreview, String> {
+    hooks_install::status_line_preview(install, &hook_exe_path(&app).to_string_lossy())
+}
+
+#[tauri::command]
+fn usage_bar_apply(app: AppHandle, install: bool, fingerprint: String) -> Result<String, String> {
+    hooks_install::status_line_apply(install, &hook_exe_path(&app).to_string_lossy(), &fingerprint)
+}
+
+#[tauri::command]
 async fn claude_info(store: State<'_, Store>) -> Result<Value, String> {
     let custom = store.get().claude_path;
     let path = claude::find_claude(&custom).map(|p| claude::path_display(&p));
@@ -540,6 +563,78 @@ fn open_sprites_folder(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+// ── OpenCode ─────────────────────────────────────────────────────────────────
+
+#[tauri::command]
+async fn opencode_status(app: AppHandle) -> Result<opencode::PluginStatus, String> {
+    let hook = hook_exe_path(&app).to_string_lossy().into_owned();
+    let custom = app.state::<Store>().get().opencode_path;
+    tauri::async_runtime::spawn_blocking(move || opencode::status(&hook, &custom))
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn opencode_plugin_preview(app: AppHandle, install: bool) -> Result<String, String> {
+    opencode::preview(install, &hook_exe_path(&app).to_string_lossy())
+}
+
+#[tauri::command]
+fn opencode_plugin_apply(app: AppHandle, install: bool) -> Result<String, String> {
+    opencode::apply(install, &hook_exe_path(&app).to_string_lossy())
+}
+
+#[tauri::command]
+async fn opencode_models(app: AppHandle) -> Result<Vec<String>, String> {
+    let custom = app.state::<Store>().get().opencode_path;
+    tauri::async_runtime::spawn_blocking(move || opencode::models(&custom))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+// ── Sprites e inicialização ──────────────────────────────────────────────────
+
+#[tauri::command]
+async fn sprites_download(app: AppHandle, force: bool) -> Result<Value, String> {
+    let dir = sprites_dir(&app);
+    let (ok, failed) = sprites::download(&app, &dir, force).await?;
+    Ok(json!({ "downloaded": ok, "failed": failed }))
+}
+
+#[tauri::command]
+fn sprites_missing(app: AppHandle) -> usize {
+    sprites::missing(&sprites_dir(&app))
+}
+
+#[tauri::command]
+fn autostart_get(app: AppHandle) -> bool {
+    app.autolaunch().is_enabled().unwrap_or(false)
+}
+
+#[tauri::command]
+fn autostart_set(app: AppHandle, on: bool) -> Result<bool, String> {
+    let launcher = app.autolaunch();
+    let result = if on { launcher.enable() } else { launcher.disable() };
+    result.map_err(|e| e.to_string())?;
+    Ok(launcher.is_enabled().unwrap_or(on))
+}
+
+/// Erros do frontend (ex.: o laço de desenho do pet) vão para digitama.log.
+#[tauri::command]
+fn log_error(app: AppHandle, window: tauri::Window, message: String) {
+    use std::io::Write;
+    let path = app.state::<Store>().data_dir().join("digitama.log");
+    // o log não cresce sem fim
+    if std::fs::metadata(&path).is_ok_and(|m| m.len() > 512 * 1024) {
+        let _ = std::fs::remove_file(&path);
+    }
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+        let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+        let text: String = message.chars().take(2000).collect();
+        let _ = writeln!(f, "[{secs}] {}: {text}", window.label());
+    }
+}
+
 #[tauri::command]
 fn pet_visibility(app: AppHandle, visible: Option<bool>) {
     toggle_pet(&app, visible);
@@ -609,6 +704,7 @@ pub fn run() {
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             toggle_pet(app, Some(true));
         }))
+        .plugin(tauri_plugin_autostart::init(tauri_plugin_autostart::MacosLauncher::LaunchAgent, None))
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(|app, shortcut, event| {
@@ -625,6 +721,7 @@ pub fn run() {
                 .build(),
         )
         .manage(pipe::Pending::default())
+        .manage(pipe::Usage::default())
         .manage(claude::Chat::default())
         .manage(Hit::default())
         .manage(Attach::default())
@@ -639,6 +736,20 @@ pub fn run() {
             start_hit_poll(handle.clone());
             if let Err(e) = build_tray(&handle) {
                 eprintln!("[digitama] bandeja: {e}");
+            }
+            // Primeira vez nesta máquina: abre os "Primeiros passos" do Digivice e
+            // já baixa os sprites que faltam, em segundo plano.
+            if !handle.state::<Store>().get().onboarded {
+                open_window_later(&handle, "settings");
+            }
+            if sprites::missing(&sprites_dir(&handle)) > 0 {
+                let app = handle.clone();
+                tauri::async_runtime::spawn(async move {
+                    let dir = sprites_dir(&app);
+                    if let Err(e) = sprites::download(&app, &dir, false).await {
+                        eprintln!("[digitama] sprites: {e}");
+                    }
+                });
             }
             let mut shortcuts = vec![chat_shortcut(), shot_shortcut()];
             if handle.state::<Store>().get().print_screen_key {
@@ -690,6 +801,19 @@ pub fn run() {
             mcp_command,
             mcp_install,
             custom_sprites,
+            usage_get,
+            usage_bar_status,
+            usage_bar_preview,
+            usage_bar_apply,
+            log_error,
+            opencode_status,
+            opencode_plugin_preview,
+            opencode_plugin_apply,
+            opencode_models,
+            sprites_download,
+            sprites_missing,
+            autostart_get,
+            autostart_set,
             open_sprites_folder,
             pet_visibility,
             quit,

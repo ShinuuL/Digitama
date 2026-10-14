@@ -1,5 +1,6 @@
-// Chat com o Claude pelo Claude Code logado (OAuth): texto, print da tela e a
-// persona do Digimon atual. Os eventos chegam do backend em stream-json.
+// Chat do pet com o Claude Code logado (OAuth) ou com o OpenCode (qualquer
+// provedor configurado nele): texto, print da tela e a persona do Digimon atual.
+// Os eventos chegam do backend como JSON de cada CLI.
 import "./chat.css";
 import { listen } from "@tauri-apps/api/event";
 import { api, type PetState, type Shot } from "../shared/api";
@@ -12,14 +13,18 @@ document.body.innerHTML = `
   <header>
     <canvas id="avatar" width="56" height="56"></canvas>
     <div class="who"><b id="name"></b><span id="status">pronto</span></div>
-    <label class="toggle" title="O Claude responde no papel do seu Digimon"><input type="checkbox" id="persona" /> persona</label>
+    <select id="provider" title="Quem responde">
+      <option value="claude">Claude Code</option>
+      <option value="opencode">OpenCode</option>
+    </select>
+    <label class="toggle" title="A IA responde no papel do seu Digimon"><input type="checkbox" id="persona" /> persona</label>
     <button id="reset" title="Começar uma conversa nova">Nova</button>
   </header>
   <div id="info"></div>
   <main id="log"></main>
   <footer>
     <div id="attach" class="hidden"><img id="thumb" alt="print" /><button id="unattach" title="Remover">✕</button></div>
-    <textarea id="input" rows="3" placeholder="Pergunte ao Claude…  (Enter envia, Shift+Enter quebra linha)"></textarea>
+    <textarea id="input" rows="3" placeholder="Pergunte…  (Enter envia, Shift+Enter quebra linha)"></textarea>
     <div class="actions">
       <button id="shot" title="Tirar print da tela (o Digitama some na hora do print)">📷 Print</button>
       <span class="hint">Print Screen ou Ctrl+Alt+Shift+P</span>
@@ -35,6 +40,11 @@ let current: { id: string; el: HTMLElement; text: string } | null = null;
 const streamed = new Set<string>();
 const toolChips = new Set<string>();
 let stderrTail: string[] = [];
+/** OpenCode: já apareceu um erro nesta resposta (não repetir no fim). */
+let ocErrored = false;
+
+const PROVIDERS = { claude: "Claude Code", opencode: "OpenCode" } as const;
+const providerName = () => PROVIDERS[state.chatProvider] ?? "Claude Code";
 
 function mon() {
   return monFor(state.line, state.currentStage);
@@ -48,6 +58,8 @@ function paintHeader() {
   g.clearRect(0, 0, c.width, c.height);
   drawMonFit(g, m.id, 28, 54, 52, 52);
   $<HTMLInputElement>("#persona").checked = state.personaChat;
+  $<HTMLSelectElement>("#provider").value = state.chatProvider;
+  $<HTMLTextAreaElement>("#input").placeholder = `Pergunte ao ${providerName()}…  (Enter envia, Shift+Enter quebra linha)`;
 }
 
 function setBusy(on: boolean, status?: string) {
@@ -114,7 +126,47 @@ function chip(id: string, name: string) {
 
 type Ev = Record<string, any>;
 
+/** Linhas do `opencode run --format json`: text, tool_use, step_*, error. */
+function onOpencode(ev: Ev) {
+  switch (ev.type) {
+    case "text": {
+      const part = ev.part ?? {};
+      if (part.text) appendText(part.id ?? crypto.randomUUID(), part.text);
+      current = null; // cada parte de texto do OpenCode chega inteira
+      break;
+    }
+    case "tool_use": {
+      const part = ev.part ?? {};
+      chip(part.id ?? part.partID ?? crypto.randomUUID(), part.tool ?? "ferramenta");
+      break;
+    }
+    case "error":
+      ocErrored = true;
+      add("error", esc(`Erro: ${ev.error?.message ?? ev.error?.data?.message ?? "desconhecido"}`));
+      break;
+    case "digitama_stderr":
+      stderrTail = [...stderrTail, ev.text].slice(-8);
+      break;
+    case "digitama_exit": {
+      if (ev.code && ev.code !== 0 && !ocErrored) {
+        const tail = stderrTail.join("\n");
+        const auth = /auth|login|api key|unauthorized|401/i.test(tail);
+        add(
+          "error",
+          esc(auth ? "O OpenCode não tem um provedor configurado. Rode `opencode auth login` num terminal." : `O OpenCode terminou com erro.${tail ? "\n" + tail : ""}`),
+        );
+      }
+      stderrTail = [];
+      ocErrored = false;
+      current = null;
+      setBusy(false, "pronto");
+      break;
+    }
+  }
+}
+
 function onEvent(ev: Ev) {
+  if (ev.provider === "opencode") return onOpencode(ev);
   switch (ev.type) {
     case "system":
       if (ev.subtype === "init") {
@@ -183,6 +235,7 @@ async function send() {
   input.value = "";
   setAttachment(null);
   setBusy(true);
+  if (state.chatProvider === "opencode") $("#info").textContent = `OpenCode · ${state.opencodeModel || "modelo padrão do OpenCode"}`;
   const persona = state.personaChat ? personaPrompt(mon(), state.nickname) : null;
   try {
     await api.chatSend(text, img?.png ?? null, persona);
@@ -197,13 +250,21 @@ $("#stop").onclick = () => {
   void api.chatStop();
   setBusy(false, "interrompido");
 };
-$("#reset").onclick = () => {
+function resetConversation(status = "nova conversa") {
   void api.chatReset();
   $("#log").replaceChildren();
   streamed.clear();
   toolChips.clear();
   current = null;
-  setBusy(false, "nova conversa");
+  setBusy(false, status);
+}
+$("#reset").onclick = () => resetConversation();
+$<HTMLSelectElement>("#provider").onchange = (e) => {
+  const value = (e.target as HTMLSelectElement).value as PetState["chatProvider"];
+  state.chatProvider = value;
+  void api.patch({ chatProvider: value });
+  resetConversation(`agora com ${providerName()}`);
+  intro();
 };
 // O print abre o recorte (seleção + anotações); "Perguntar ao Claude" anexa aqui.
 $("#shot").onclick = () => void api.snipOpen();
@@ -235,9 +296,18 @@ async function boot() {
   await listen("chat-attach", async () => setAttachment((await api.chatTakeAttachment()) ?? attachment));
   const pending = await api.chatTakeAttachment();
   if (pending) setAttachment(pending);
-  const m = mon();
-  add("note", esc(`${m.name} (${STAGES[m.stage]}) está aqui. O chat usa o seu Claude Code logado — sem chave de API — com os mesmos servidores MCP e conectores.`));
+  intro();
   $("#input").focus();
+}
+
+function intro() {
+  const m = mon();
+  const how =
+    state.chatProvider === "opencode"
+      ? "O chat usa o seu OpenCode, com os provedores e modelos configurados nele (troque o modelo no Digivice → Chat)."
+      : "O chat usa o seu Claude Code logado — sem chave de API — com os mesmos servidores MCP e conectores.";
+  $("#info").textContent = providerName();
+  add("note", esc(`${m.name} (${STAGES[m.stage]}) está aqui. ${how}`));
 }
 
 void boot();

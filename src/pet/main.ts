@@ -4,7 +4,8 @@ import "../shared/digivice.css";
 import "./pet.css";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { api, type MediaState, type PetState } from "../shared/api";
+import { api, type MediaState, type PetState, type Usage } from "../shared/api";
+import { pct, usageBlock } from "../shared/usage";
 import { LINES, STAGES, monFor, pick, stageForXp, type Mon } from "../shared/lore";
 import { setSoundEnabled, sfx } from "../shared/sound";
 import { Bubble, type Question } from "./bubble";
@@ -38,6 +39,8 @@ let state: PetState;
 let stage = 0; // estágio mostrado
 let mon: Mon;
 let media: MediaState | null = null;
+let usage: Usage | null = null;
+let warnedAt = 0; // último limite (80/95) avisado na janela de 5h
 let hover = false;
 let chatBusy = false;
 let working = false;
@@ -140,6 +143,10 @@ interface HookPayload {
   notification_type?: string;
   request_id?: string;
   digitama_internal?: boolean;
+  /** "claude", "opencode"… (posto pelo relay). */
+  digitama_agent?: string;
+  /** O id da permissão no OpenCode (para saber quando ela foi respondida lá). */
+  opencode_request_id?: string;
 }
 
 function summarize(tool: string, input: Record<string, unknown> = {}): string {
@@ -150,6 +157,7 @@ function summarize(tool: string, input: Record<string, unknown> = {}): string {
 
 function onHook(p: HookPayload) {
   const internal = !!p.digitama_internal;
+  const agent = p.digitama_agent ?? "claude";
   activity();
   switch (p.hook_event_name) {
     case "SessionStart":
@@ -189,10 +197,12 @@ function onHook(p: HookPayload) {
       const type = p.notification_type ?? "";
       const msg = p.message ?? "";
       if (type === "permission_prompt" || /permission/i.test(msg)) break; // o PermissionRequest cuida
-      if (type === "idle_prompt" || /waiting for your input/i.test(msg)) {
+      if (type === "idle_prompt" || type === "question" || /waiting for your input/i.test(msg)) {
+        if (internal) break;
         play("alert", 900);
         sfx.ask();
-        bubble.show({ kind: "waiting", text: pick(mon.lines.ask), cwd: p.cwd });
+        attack(false);
+        bubble.show({ kind: "waiting", text: type === "question" && msg ? msg : pick(mon.lines.ask), cwd: p.cwd, agent });
       } else if (msg) {
         say(msg);
       }
@@ -210,12 +220,24 @@ function onHook(p: HookPayload) {
           void api.hookDecline(p.request_id);
           break;
         }
-        bubble.show({ kind: "question", requestId: p.request_id, questions, cwd: p.cwd });
+        bubble.show({ kind: "question", requestId: p.request_id, questions, cwd: p.cwd, agent });
       } else {
-        bubble.show({ kind: "permission", requestId: p.request_id, tool: p.tool_name ?? "Ferramenta", summary: summarize(p.tool_name ?? "", p.tool_input), cwd: p.cwd });
+        bubble.show({
+          kind: "permission",
+          requestId: p.request_id,
+          tool: p.tool_name ?? "Ferramenta",
+          summary: summarize(p.tool_name ?? "", p.tool_input),
+          cwd: p.cwd,
+          agent,
+          extId: p.opencode_request_id,
+        });
       }
       break;
     }
+    case "PermissionReplied":
+      // respondida direto no OpenCode: o balão some
+      if (p.opencode_request_id) bubble.dropExternal(p.opencode_request_id);
+      break;
   }
 }
 
@@ -335,6 +357,7 @@ function showStatus() {
   top.className = "st-top";
   top.append(c, info);
   card.append(top, lore);
+  card.insertBefore(usageBlock(usage), lore);
   bubble.show({ kind: "card", node: card, ttl: 12 });
 }
 
@@ -406,14 +429,27 @@ let walkStep = 0;
 let nextNote = 0;
 let nextZ = 0;
 
+/** Um erro no desenho não pode apagar o pet: registra e segue no próximo quadro. */
+let lastError = "";
 function frame(now: number) {
+  try {
+    frameInner(now);
+  } catch (e) {
+    const msg = e instanceof Error ? `${e.message}\n${e.stack ?? ""}` : String(e);
+    if (msg !== lastError) {
+      lastError = msg;
+      void api.logError(`frame: ${msg}`);
+    }
+    anim = null;
+  }
+  requestAnimationFrame(frame);
+}
+
+function frameInner(now: number) {
   const dt = Math.min(0.05, (now - last) / 1000);
   last = now;
   const t = now / 1000;
-  if (!mon) {
-    requestAnimationFrame(frame);
-    return;
-  }
+  if (!mon) return;
 
   const id = monId(mon);
   const S = scaleOf(id);
@@ -599,7 +635,40 @@ function frame(now: number) {
     musicBar.style.bottom = `${H - petBox[1] + 8}px`;
   }
   syncRegions(now);
-  requestAnimationFrame(frame);
+  drawUsageHud();
+}
+
+/** Medidor pequeno do uso do Claude ao passar o mouse no pet. */
+const hud = document.createElement("div");
+hud.className = "usage-hud hidden";
+document.body.appendChild(hud);
+let hudKey = "";
+function drawUsageHud() {
+  const show = hover && !!usage && pct(usage.five_hour) !== null && !bubble.visible && !ring.visible;
+  hud.classList.toggle("hidden", !show);
+  if (!show) return;
+  const key = JSON.stringify(usage);
+  if (key !== hudKey) {
+    hudKey = key;
+    hud.replaceChildren(usageBlock(usage));
+  }
+  const [bx, by, bw] = petBox;
+  // empilha acima da barra de música quando as duas aparecem
+  const music = musicBar.classList.contains("hidden") ? null : musicBar.getBoundingClientRect();
+  const bottom = music ? music.top - 6 : by - 6;
+  hud.style.left = `${Math.max(4, Math.min(W - 164, bx + bw / 2 - 80))}px`;
+  hud.style.top = `${Math.max(4, bottom - hud.offsetHeight)}px`;
+}
+
+function onUsage(u: Usage) {
+  usage = u;
+  const p = pct(u.five_hour) ?? 0;
+  const level = p >= 95 ? 95 : p >= 80 ? 80 : 0;
+  if (level && level > warnedAt) {
+    warnedAt = level;
+    play("alert", 900);
+    say(`Parceiro, já usamos ${Math.round(p)}% do limite de 5h do Claude!`, 6);
+  } else if (!level) warnedAt = 0;
 }
 
 // ── Eventos do backend ───────────────────────────────────────────────────────
@@ -617,6 +686,15 @@ async function boot() {
   window.setTimeout(() => say(pick(mon.lines.greet)), 600);
 
   await listen<HookPayload>("hook", (e) => onHook(e.payload));
+  await listen<Usage>("usage", (e) => onUsage(e.payload));
+  try {
+    const u = await api.usageGet();
+    if (u) usage = u;
+  } catch {
+    /* ainda sem uso */
+  }
+  window.addEventListener("error", (e) => void api.logError(`window: ${e.message} @ ${e.filename}:${e.lineno}`));
+  window.addEventListener("unhandledrejection", (e) => void api.logError(`promise: ${String(e.reason)}`));
   await listen<MediaState>("media", (e) => {
     const was = musicMode();
     media = e.payload;
@@ -630,6 +708,15 @@ async function boot() {
     renderMusic();
   });
   await listen<string>("pet-say", (e) => say(e.payload, 6));
+  // sprites baixados na primeira abertura: troca o desenho em código pelos reais
+  await listen("sprites-ready", async () => {
+    try {
+      await loadPacks(await api.customSprites());
+      say("Sprites carregados!");
+    } catch {
+      /* fica o desenho em código */
+    }
+  });
   await listen("pet-attack", () => attack());
   await listen("pet-flash", () => {
     fx.flash = 0.7;

@@ -1,6 +1,6 @@
-// O balão de fala do pet: falas soltas, e os pedidos do Claude Code —
-// perguntas (AskUserQuestion), permissões de ferramenta e "estou esperando".
-// Clicar no texto leva à janela do chat do Claude; os botões respondem direto.
+// O balão de fala do pet: falas soltas, e os pedidos dos agentes (Claude Code,
+// OpenCode) — perguntas, permissões de ferramenta e "estou esperando".
+// Clicar no texto leva à janela do agente; os botões respondem direto.
 import { api } from "../shared/api";
 
 export interface Question {
@@ -13,9 +13,13 @@ export interface Question {
 export type BubbleReq =
   | { kind: "say"; text: string; ttl?: number }
   | { kind: "card"; node: HTMLElement; ttl?: number }
-  | { kind: "question"; requestId: string; questions: Question[]; cwd?: string }
-  | { kind: "permission"; requestId: string; tool: string; summary: string; cwd?: string }
-  | { kind: "waiting"; text: string; cwd?: string };
+  | { kind: "question"; requestId: string; questions: Question[]; cwd?: string; agent?: string }
+  | { kind: "permission"; requestId: string; tool: string; summary: string; cwd?: string; agent?: string; extId?: string }
+  | { kind: "waiting"; text: string; cwd?: string; agent?: string };
+
+/** Nome de cada agente no balão. */
+export const AGENT_NAMES: Record<string, string> = { claude: "Claude Code", opencode: "OpenCode" };
+const agentName = (id?: string) => AGENT_NAMES[id ?? "claude"] ?? id ?? "Claude Code";
 
 type Interactive = Exclude<BubbleReq, { kind: "say" } | { kind: "card" }>;
 
@@ -73,6 +77,18 @@ export class Bubble {
     if (this.current && "requestId" in this.current && this.current.requestId === requestId) this.next();
   }
 
+  /** Uma permissão respondida no próprio agente (ex.: no terminal do OpenCode). */
+  dropExternal(extId: string) {
+    if (!extId) return;
+    const match = (r: Interactive) => r.kind === "permission" && r.extId === extId;
+    for (const r of this.queue.filter(match)) if ("requestId" in r) void api.hookDecline(r.requestId);
+    this.queue = this.queue.filter((r) => !match(r));
+    if (this.current && match(this.current)) {
+      if ("requestId" in this.current) void api.hookDecline(this.current.requestId);
+      this.next();
+    }
+  }
+
   /** "Claude terminou": o aviso de espera não faz mais sentido. */
   clearWaiting() {
     this.queue = this.queue.filter((r) => r.kind !== "waiting");
@@ -103,7 +119,8 @@ export class Bubble {
 
   private renderCurrent() {
     const req = this.current!;
-    const goChat = el("button", "ghost", "💬 Responder no chat");
+    const name = agentName(req.agent);
+    const goChat = el("button", "ghost", `💬 Responder no ${name}`);
     goChat.onclick = () => {
       if ("requestId" in req) void api.hookDecline(req.requestId);
       this.toChat(req.cwd);
@@ -113,21 +130,21 @@ export class Bubble {
     if (req.kind === "waiting") {
       const text = el("div", "say link", req.text);
       text.onclick = () => this.toChat(req.cwd);
-      const open = el("button", "primary", "Abrir o chat do Claude");
+      const open = el("button", "primary", `Abrir o ${name}`);
       open.onclick = () => {
         this.toChat(req.cwd);
         this.next();
       };
       const close = el("button", "ghost", "Depois");
       close.onclick = () => this.next();
-      this.render([el("div", "tag", "Claude está esperando você"), text, row(open, close)]);
+      this.render([el("div", "tag", `${name} está esperando você`), text, row(open, close)]);
       return;
     }
 
     if (req.kind === "permission") {
-      const title = el("div", "tag", `Permissão · ${req.tool}`);
+      const title = el("div", "tag", `${name} · ${req.tool}`);
       const body = el("pre", "code link", req.summary);
-      body.title = "Clique para ver no chat do Claude";
+      body.title = `Clique para ver no ${name}`;
       body.onclick = () => this.toChat(req.cwd);
       const allow = el("button", "primary", "Permitir");
       const deny = el("button", "danger", "Negar");
@@ -152,7 +169,7 @@ export class Bubble {
       const parts: HTMLElement[] = [];
       const head = el("div", "tag", `${q.header || "Pergunta"}${req.questions.length > 1 ? ` · ${i + 1}/${req.questions.length}` : ""}`);
       const text = el("div", "say link", q.question);
-      text.title = "Clique para ver no chat do Claude";
+      text.title = `Clique para ver no ${name}`;
       text.onclick = () => this.toChat(req.cwd);
       parts.push(head, text);
       const opts = el("div", "options");

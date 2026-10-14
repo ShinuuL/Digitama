@@ -17,6 +17,10 @@ export interface PetState {
   model: string;
   forceOauth: boolean;
   printScreenKey: boolean;
+  chatProvider: "claude" | "opencode";
+  opencodePath: string;
+  opencodeModel: string;
+  onboarded: boolean;
   pos: [number, number] | null;
   tasksDone: number;
   questionsAnswered: number;
@@ -29,6 +33,16 @@ export interface MediaState {
   source: string;
   isSpotify: boolean;
   spotifyFocused: boolean;
+}
+
+/** Limites do plano do Claude, como a barra de status do Claude Code recebe. */
+export interface UsageWindow {
+  used_percentage?: number;
+  resets_at?: number;
+}
+export interface Usage {
+  five_hour?: UsageWindow;
+  seven_day?: UsageWindow;
 }
 
 export interface Shot {
@@ -73,4 +87,21 @@ export const api = {
   openSpritesFolder: () => invoke("open_sprites_folder"),
   petVisibility: (visible?: boolean) => invoke("pet_visibility", { visible: visible ?? null }),
   quit: () => invoke("quit"),
+  usageGet: () => invoke<Usage | null>("usage_get"),
+  usageBarStatus: () => invoke<boolean>("usage_bar_status"),
+  usageBarPreview: (install: boolean) =>
+    invoke<{ diff: string; settingsPath: string; fingerprint: string; changes: boolean }>("usage_bar_preview", { install }),
+  usageBarApply: (install: boolean, fingerprint: string) => invoke<string>("usage_bar_apply", { install, fingerprint }),
+  logError: (message: string) => invoke("log_error", { message }).catch(() => {}),
+  opencodeStatus: () =>
+    invoke<{ installed: boolean; upToDate: boolean; foreign: boolean; path: string; found: string | null; version: string | null }>(
+      "opencode_status",
+    ),
+  opencodePluginPreview: (install: boolean) => invoke<string>("opencode_plugin_preview", { install }),
+  opencodePluginApply: (install: boolean) => invoke<string>("opencode_plugin_apply", { install }),
+  opencodeModels: () => invoke<string[]>("opencode_models"),
+  spritesDownload: (force: boolean) => invoke<{ downloaded: number; failed: number }>("sprites_download", { force }),
+  spritesMissing: () => invoke<number>("sprites_missing"),
+  autostartGet: () => invoke<boolean>("autostart_get"),
+  autostartSet: (on: boolean) => invoke<boolean>("autostart_set", { on }),
 };

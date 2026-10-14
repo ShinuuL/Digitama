@@ -252,6 +252,111 @@ pub fn apply(install: bool, exe: &str, expected: &str) -> Result<String, String>
     Ok(backup)
 }
 
+// ── Barra de status: uso do plano do Claude ──────────────────────────────────
+//
+// O Claude Code passa os limites do plano (`rate_limits`) para o comando da barra
+// de status. O relay toma o lugar desse comando e repassa os limites ao pet; a
+// barra que você já tinha (a do Coucou, por exemplo) fica salva em
+// `statusline-previous.json` ao lado do relay, e o relay continua rodando ela —
+// então ela segue aparecendo igual. Remover devolve a anterior.
+
+const PREVIOUS_FILE: &str = "statusline-previous.json";
+
+fn previous_path(exe: &str) -> std::path::PathBuf {
+    std::path::Path::new(exe).with_file_name(PREVIOUS_FILE)
+}
+
+fn status_line_is_ours(v: &Value) -> bool {
+    v.get("command").and_then(Value::as_str).is_some_and(|c| c.contains(MARKER))
+}
+
+pub fn status_line_installed(exe: &str) -> bool {
+    let _ = exe;
+    read_bytes()
+        .ok()
+        .flatten()
+        .and_then(|b| parse(Some(&b)).ok())
+        .and_then(|v| v.get("statusLine").cloned())
+        .is_some_and(|sl| status_line_is_ours(&sl))
+}
+
+fn status_line_settings(current: &Value, install: bool, exe: &str, previous: Option<&Value>) -> Result<Value, String> {
+    let mut root = current.as_object().cloned().unwrap_or_default();
+    let existing = root.get("statusLine").cloned();
+    if install && existing.as_ref().is_some_and(|v| !v.is_object()) {
+        return Err("\"statusLine\" no settings.json tem um tipo inesperado — nada foi alterado.".into());
+    }
+    let next = if install {
+        // troca só o comando: padding e afins continuam como estavam
+        let mut sl = existing.filter(Value::is_object).unwrap_or_else(|| json!({}));
+        let obj = sl.as_object_mut().expect("objeto");
+        obj.entry("type").or_insert_with(|| json!("command"));
+        obj.insert("command".into(), json!(format!("\"{}\" --statusline", exe.replace('\\', "/"))));
+        Some(sl)
+    } else if existing.as_ref().is_some_and(status_line_is_ours) {
+        previous.cloned()
+    } else {
+        existing // já não é nosso: não mexe
+    };
+    match next {
+        Some(v) => root.insert("statusLine".into(), v),
+        None => root.remove("statusLine"),
+    };
+    Ok(Value::Object(root))
+}
+
+fn read_previous(exe: &str) -> Option<Value> {
+    serde_json::from_slice::<Value>(&std::fs::read(previous_path(exe)).ok()?).ok().filter(Value::is_object)
+}
+
+pub fn status_line_preview(install: bool, exe: &str) -> Result<HookPreview, String> {
+    let bytes = read_bytes()?;
+    let current = parse(bytes.as_deref())?;
+    let next = status_line_settings(&current, install, exe, read_previous(exe).as_ref())?;
+    let before = if bytes.is_some() { pretty(&current) } else { String::new() };
+    let after = pretty(&next);
+    Ok(HookPreview {
+        changes: before != after,
+        diff: line_diff(&before, &after),
+        settings_path: settings_path().to_string_lossy().into_owned(),
+        fingerprint: fingerprint(bytes.as_deref()),
+    })
+}
+
+pub fn status_line_apply(install: bool, exe: &str, expected: &str) -> Result<String, String> {
+    let bytes = read_bytes()?;
+    if fingerprint(bytes.as_deref()) != expected {
+        return Err("O settings.json mudou desde a prévia. Abra a prévia de novo antes de gravar.".into());
+    }
+    let current = parse(bytes.as_deref())?;
+    let previous = read_previous(exe);
+    // Instalando por cima de uma barra que não é nossa: guarda ela ao lado do relay.
+    if install {
+        if let Some(own) = current.get("statusLine").filter(|v| v.is_object() && !status_line_is_ours(v)) {
+            std::fs::write(previous_path(exe), serde_json::to_string_pretty(own).unwrap_or_default())
+                .map_err(|e| format!("Não consegui guardar a sua barra de status atual: {e} — nada foi alterado."))?;
+        }
+    }
+    let next = status_line_settings(&current, install, exe, previous.as_ref())?;
+    let path = settings_path();
+    let mut backup = String::new();
+    if let Some(original) = &bytes {
+        let b = path.with_file_name(format!("settings.json.digitama-{}.bak", stamp()));
+        std::fs::write(&b, original).map_err(|e| format!("Não consegui criar o backup: {e} — nada foi alterado."))?;
+        backup = b.to_string_lossy().into_owned();
+    }
+    let tmp = path.with_extension("json.digitama-tmp");
+    std::fs::write(&tmp, pretty(&next).as_bytes()).map_err(|e| e.to_string())?;
+    std::fs::rename(&tmp, &path).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        format!("Não consegui gravar o settings.json: {e}")
+    })?;
+    if !install {
+        let _ = std::fs::remove_file(previous_path(exe));
+    }
+    Ok(backup)
+}
+
 /// AAAAMMDD-HHMMSS em UTC, sem dependências.
 fn stamp() -> String {
     let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0) as i64;
@@ -299,6 +404,23 @@ mod tests {
         assert!(parse(Some(b"[1]")).is_err());
         assert!(parse(Some(b"{ quebrado")).is_err());
         assert_eq!(parse(Some(b"\xEF\xBB\xBF{}")).unwrap(), json!({}));
+    }
+
+    #[test]
+    fn barra_de_status_troca_so_o_comando_e_volta_a_anterior() {
+        let coucou = json!({ "type": "command", "command": "\"C:/x/coucou-hook.exe\" --statusline", "padding": 1 });
+        let cur = json!({ "model": "opus", "statusLine": coucou });
+        let ours = status_line_settings(&cur, true, EXE, None).unwrap();
+        assert!(status_line_is_ours(&ours["statusLine"]));
+        assert_eq!(ours["statusLine"]["padding"], 1);
+        assert_eq!(ours["model"], "opus");
+        // remover devolve exatamente a do Coucou
+        let back = status_line_settings(&ours, false, EXE, Some(&coucou)).unwrap();
+        assert_eq!(back["statusLine"], coucou);
+        // sem anterior, a chave some
+        assert!(status_line_settings(&ours, false, EXE, None).unwrap().get("statusLine").is_none());
+        // uma barra que não é nossa nunca é removida
+        assert_eq!(status_line_settings(&cur, false, EXE, None).unwrap()["statusLine"], coucou);
     }
 
     #[test]

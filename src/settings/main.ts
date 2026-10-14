@@ -3,13 +3,15 @@
 import "../shared/digivice.css";
 import "./settings.css";
 import { listen } from "@tauri-apps/api/event";
-import { api, type PetState } from "../shared/api";
+import { api, type PetState, type Usage } from "../shared/api";
+import { usageBlock } from "../shared/usage";
 import { iconImg } from "../shared/icons";
 import { LINES, STAGES, XP_STAGES, monFor, stageForXp, type LineId } from "../shared/lore";
 import { drawMon, drawMonFit, hasPack, loadPacks, monBox, type Pose } from "../pet/render";
 
 const $ = <T extends HTMLElement>(sel: string) => document.querySelector<T>(sel)!;
 let state: PetState;
+let usage: Usage | null = null;
 
 interface Section {
   id: string;
@@ -18,8 +20,9 @@ interface Section {
   color: string;
 }
 const SECTIONS: Section[] = [
+  { id: "start", icon: "play", title: "Início", color: "#3dff8a" },
   { id: "digimon", icon: "egg", title: "Digimon", color: "#ffd23f" },
-  { id: "hooks", icon: "hook", title: "Hooks", color: "#3dff8a" },
+  { id: "hooks", icon: "hook", title: "Agentes", color: "#3dff8a" },
   { id: "chat", icon: "chat", title: "Chat", color: "#9fe6ff" },
   { id: "mcp", icon: "plug", title: "MCP", color: "#c48bff" },
   { id: "snip", icon: "camera", title: "Captura", color: "#ffffff" },
@@ -70,6 +73,21 @@ SECTIONS.forEach((s, i) => {
 // ── Páginas ──────────────────────────────────────────────────────────────────
 
 $("#pages").innerHTML = `
+<section data-page="start">
+  <div class="dv-panel">
+    <p>Bem-vindo! Vamos deixar o Digitama pronto nesta máquina.</p>
+    <div class="checklist">
+      <div class="check-row"><span class="dot" id="ck-claude"></span><div><b>Claude Code</b><span class="muted" id="ck-claude-text">verificando…</span></div><button class="dv-btn" data-goto="hooks">Conectar</button></div>
+      <div class="check-row"><span class="dot" id="ck-oc"></span><div><b>OpenCode</b><span class="muted" id="ck-oc-text">verificando…</span></div><button class="dv-btn" data-goto="hooks">Conectar</button></div>
+      <div class="check-row"><span class="dot" id="ck-sprites"></span><div><b>Sprites dos Digimon</b><span class="muted" id="ck-sprites-text">verificando…</span></div><button class="dv-btn" id="ck-sprites-btn">Baixar</button></div>
+      <div class="check-row"><span class="dot on"></span><div><b>Iniciar com o Windows</b><span class="muted">o pet abre sozinho quando você liga o PC</span></div><label class="check"><input type="checkbox" id="autostart" /> ligado</label></div>
+    </div>
+    <div class="dv-bar sp hidden" id="sprites-bar-start"><i style="width:0%"></i></div>
+    <div class="row"><button class="dv-btn go" id="onboard-done">Pronto, vamos lá!</button>
+    <span class="muted">Dá para voltar aqui quando quiser pelo hexágono ▶ do Digivice.</span></div>
+  </div>
+</section>
+
 <section data-page="digimon">
   <div class="battle" id="battle"></div>
   <div class="dv-panel">
@@ -90,6 +108,7 @@ $("#pages").innerHTML = `
 
 <section data-page="hooks">
   <div class="dv-panel">
+    <div class="dv-label">Claude Code — hooks</div>
     <p id="hookstatus">…</p>
     <div class="row"><button class="dv-btn go" id="hookinstall">Ver prévia e instalar</button><button class="dv-btn" id="hookremove">Ver prévia e remover</button></div>
     <div id="preview" class="hidden">
@@ -99,16 +118,54 @@ $("#pages").innerHTML = `
     </div>
     <p class="muted">Backup datado do settings.json antes de gravar. Hooks de outras ferramentas (como o coucou) não são tocados. Com o Digitama fechado, o Claude Code segue normal.</p>
   </div>
+  <div class="dv-panel">
+    <div class="dv-label">Claude Code — uso do plano</div>
+    <div id="usagebox"></div>
+    <p id="usagestatus" class="muted">…</p>
+    <div class="row"><button class="dv-btn go" id="usageinstall">Ver prévia e ativar</button><button class="dv-btn" id="usageremove">Ver prévia e desativar</button></div>
+    <div id="usagepreview" class="hidden">
+      <p class="muted" id="usagepreviewpath"></p>
+      <pre id="usagediff"></pre>
+      <div class="row"><button class="dv-btn go" id="usageapply">Confirmar e gravar</button><button class="dv-btn" id="usagecancel">Cancelar</button></div>
+    </div>
+    <p class="muted">O Claude Code só entrega os limites do plano (janela de 5h e semanal) para o comando da barra de status. O Digitama ocupa esse lugar e continua rodando a barra que você já tinha (a do coucou, por exemplo) — ela segue aparecendo igual. Desativar devolve a anterior. Só funciona com login de assinatura (Pro/Max), não com chave de API.</p>
+  </div>
+  <div class="dv-panel">
+    <div class="dv-label">OpenCode — plugin</div>
+    <p id="ocstatus">…</p>
+    <div class="row"><button class="dv-btn go" id="ocinstall">Ver prévia e instalar</button><button class="dv-btn" id="ocremove">Ver prévia e remover</button></div>
+    <div id="ocpreview" class="hidden">
+      <p class="muted" id="ocpreviewpath"></p>
+      <pre id="ocdiff"></pre>
+      <div class="row"><button class="dv-btn go" id="ocapply">Confirmar e gravar</button><button class="dv-btn" id="occancel">Cancelar</button></div>
+    </div>
+    <p class="muted">O plugin manda ao pet o fim das tarefas, as ferramentas e os pedidos de permissão do OpenCode (você pode permitir ou negar pelo balão). Reinicie o OpenCode depois de instalar.</p>
+  </div>
 </section>
 
 <section data-page="chat">
+  <div class="dv-panel grid">
+    <label class="wide"><span class="dv-label">Quem responde no chat</span>
+      <select id="provider"><option value="claude">Claude Code (sua assinatura claude.ai)</option><option value="opencode">OpenCode (qualquer provedor configurado nele)</option></select>
+    </label>
+    <label class="check wide"><input type="checkbox" id="persona" /> Responder no papel do Digimon</label>
+  </div>
   <div class="dv-panel">
+    <div class="dv-label">OpenCode</div>
+    <p id="ocinfo">…</p>
+    <div class="grid">
+      <label class="wide"><span class="dv-label">Caminho do opencode.exe</span><input id="ocpath" placeholder="detectar automaticamente" /></label>
+      <label class="wide"><span class="dv-label">Modelo (provedor/modelo)</span><input id="ocmodel" list="ocmodels" placeholder="padrão do OpenCode" /><datalist id="ocmodels"></datalist></label>
+    </div>
+    <div class="row"><button class="dv-btn" id="ocloadmodels">Carregar modelos</button><span class="muted" id="ocmodelsinfo"></span></div>
+  </div>
+  <div class="dv-panel">
+    <div class="dv-label">Claude Code</div>
     <p id="claudeinfo">…</p>
     <div class="grid">
       <label class="wide"><span class="dv-label">Caminho do claude.exe</span><input id="claudepath" placeholder="detectar automaticamente" /></label>
       <label><span class="dv-label">Modelo</span><input id="model" placeholder="padrão (sonnet, opus…)" /></label>
       <label><span class="dv-label">Ferramentas liberadas</span><input id="tools" /></label>
-      <label class="check"><input type="checkbox" id="persona" /> Responder no papel do Digimon</label>
       <label class="check"><input type="checkbox" id="oauth" /> Forçar login OAuth</label>
     </div>
     <p class="muted">O chat roda o seu Claude Code logado (assinatura claude.ai, sem chave de API), com os mesmos MCPs e conectores. Para liberar um MCP, adicione <code>mcp__servidor</code> às ferramentas.</p>
@@ -136,8 +193,9 @@ $("#pages").innerHTML = `
 <section data-page="sprites">
   <div class="dv-panel">
     <p id="spritestatus">…</p>
-    <p>Os sprites reais (Digimon World DS) são baixados para a sua pasta local com:</p>
-    <pre>node scripts/fetch-sprites.mjs</pre>
+    <p>Os sprites reais (Digimon World DS) são baixados do Wikimon para a sua pasta local na primeira abertura.</p>
+    <div class="dv-bar sp hidden" id="sprites-bar"><i style="width:0%"></i></div>
+    <div class="row"><button class="dv-btn go" id="spritesdl">Baixar o que falta</button><button class="dv-btn" id="spritesforce">Baixar tudo de novo</button><span class="muted" id="spritesprog"></span></div>
     <p class="muted">Para trocar um sprite, coloque um PNG em <code>sprites\\&lt;id&gt;\\idle.png</code> (ou <code>attack.png</code>, <code>hit.png</code>), ou <code>sprites\\&lt;id&gt;.png</code>. Uso pessoal: não distribua os sprites oficiais.</p>
     <div class="row"><button class="dv-btn" id="sprites">Abrir pasta de sprites</button></div>
   </div>
@@ -162,7 +220,7 @@ $("#pages").innerHTML = `
   </div>
 </section>`;
 
-let current = "digimon";
+let current = "start";
 function show(id: string) {
   current = id;
   document.querySelectorAll<HTMLElement>("#pages section").forEach((s) => s.classList.toggle("hidden", s.dataset.page !== id));
@@ -195,7 +253,9 @@ function renderBattle() {
       <div class="b-row"><span class="dv-label">Lv.</span><b class="b-lv">${state.currentStage}</b>
         <span class="dv-label">EXP</span><div class="dv-bar"><i style="width:${pct}%"></i></div><b>${state.xp}${hi ? "/" + hi : ""}</b></div>
       <div class="b-row"><span class="dv-label">Tipo</span><span class="b-meta"></span></div>
+      <div class="b-usage"></div>
     </div>`;
+  box.querySelector(".b-usage")!.replaceWith(usageBlock(usage));
   box.querySelector(".b-name")!.textContent = `${state.nickname ? state.nickname + " · " : ""}${m.name} — ${STAGES[m.stage]}`;
   box.querySelector(".b-meta")!.textContent = `${m.attribute} · ${m.type} · ${m.attack}`;
   const c = box.querySelector("canvas")!;
@@ -244,6 +304,9 @@ function render() {
   $<HTMLInputElement>("#persona").checked = state.personaChat;
   $<HTMLInputElement>("#oauth").checked = state.forceOauth;
   $<HTMLInputElement>("#prtsc").checked = state.printScreenKey;
+  $<HTMLSelectElement>("#provider").value = state.chatProvider;
+  $<HTMLInputElement>("#ocpath").value = state.opencodePath;
+  $<HTMLInputElement>("#ocmodel").value = state.opencodeModel;
   const ids = Object.values(LINES).flatMap((l) => l.mons.slice(1).map((m) => m.id));
   const have = ids.filter(hasPack).length;
   $("#spritestatus").textContent = `${have} de ${ids.length} Digimon com sprite real carregado${have < ids.length ? " — os outros usam o desenho em código." : "."}`;
@@ -263,6 +326,145 @@ bind("#tools", "change", (el) => save({ allowedTools: el.value.trim() }));
 bind("#persona", "change", (el) => save({ personaChat: el.checked }));
 bind("#oauth", "change", (el) => save({ forceOauth: el.checked }));
 bind("#prtsc", "change", (el) => save({ printScreenKey: el.checked }));
+bind("#provider", "change", (el) => save({ chatProvider: el.value }));
+bind("#ocpath", "change", (el) => {
+  save({ opencodePath: el.value.trim() });
+  window.setTimeout(refreshOpencode, 300);
+});
+bind("#ocmodel", "change", (el) => save({ opencodeModel: el.value.trim() }));
+bind("#autostart", "change", async (el) => {
+  try {
+    el.checked = await api.autostartSet(el.checked);
+  } catch (e) {
+    alert(`Não consegui mudar a inicialização: ${e}`);
+  }
+});
+$("#onboard-done").onclick = () => {
+  save({ onboarded: true });
+  show("digimon");
+};
+document.querySelectorAll<HTMLElement>("[data-goto]").forEach((b) => (b.onclick = () => show(b.dataset.goto!)));
+
+// ── OpenCode ─────────────────────────────────────────────────────────────────
+
+let ocPending: boolean | null = null;
+
+async function refreshOpencode() {
+  const st = await api.opencodeStatus();
+  const where = st.found ? `✅ ${st.version ?? "OpenCode"} — ${st.found}` : "⚪ OpenCode não encontrado (instale com npm i -g opencode-ai, ou informe o caminho).";
+  $("#ocinfo").textContent = where;
+  $("#ocstatus").textContent = st.foreign
+    ? `⚠️ ${st.path} existe e não é do Digitama — não vou mexer.`
+    : st.installed
+      ? `✅ Plugin instalado${st.upToDate ? "" : " (desatualizado: instale de novo)"} em ${st.path}`
+      : `⚪ Plugin não instalado. ${st.found ? "" : "(OpenCode não encontrado nesta máquina)"}`;
+  $("#ck-oc").className = `dot ${st.found ? (st.installed ? "on" : "half") : ""}`;
+  $("#ck-oc-text").textContent = st.found ? (st.installed ? "conectado ao pet" : "encontrado — falta instalar o plugin") : "não encontrado (opcional)";
+}
+
+function colorInto(pre: HTMLElement, diff: string) {
+  pre.replaceChildren(
+    ...diff.split("\n").map((l) => {
+      const span = document.createElement("span");
+      span.className = l.startsWith("+") ? "add" : l.startsWith("-") ? "del" : "";
+      span.textContent = l + "\n";
+      return span;
+    }),
+  );
+}
+
+async function ocPreview(install: boolean) {
+  try {
+    const diff = await api.opencodePluginPreview(install);
+    ocPending = install;
+    $("#ocpreviewpath").textContent = diff.trim() ? (install ? "Arquivo do plugin:" : "Será removido:") : "Nada a mudar.";
+    colorInto($("#ocdiff"), diff || "(sem diferenças)");
+    $<HTMLButtonElement>("#ocapply").disabled = !diff.trim();
+    $("#ocpreview").classList.remove("hidden");
+  } catch (e) {
+    alert(String(e));
+  }
+}
+$("#ocinstall").onclick = () => void ocPreview(true);
+$("#ocremove").onclick = () => void ocPreview(false);
+$("#occancel").onclick = () => $("#ocpreview").classList.add("hidden");
+$("#ocapply").onclick = async () => {
+  if (ocPending === null) return;
+  try {
+    const path = await api.opencodePluginApply(ocPending);
+    $("#ocpreview").classList.add("hidden");
+    $("#ocstatus").textContent = `${ocPending ? "Instalado" : "Removido"}: ${path}. Reinicie o OpenCode.`;
+    window.setTimeout(refreshOpencode, 800);
+  } catch (e) {
+    alert(String(e));
+  }
+};
+$("#ocloadmodels").onclick = async () => {
+  $("#ocmodelsinfo").textContent = "carregando…";
+  try {
+    const models = await api.opencodeModels();
+    $("#ocmodels").replaceChildren(...models.map((m) => new Option(m, m)));
+    $("#ocmodelsinfo").textContent = `${models.length} modelos — digite ou escolha no campo acima`;
+  } catch (e) {
+    $("#ocmodelsinfo").textContent = `Falhou: ${e}`;
+  }
+};
+
+// ── Uso do Claude ────────────────────────────────────────────────────────────
+
+let usagePending: { install: boolean; fingerprint: string } | null = null;
+
+async function refreshUsage() {
+  const on = await api.usageBarStatus();
+  $("#usagestatus").textContent = on ? "✅ Ativo: o pet recebe o uso a cada resposta do Claude Code." : "⚪ Inativo.";
+  $("#usagebox").replaceChildren(usageBlock(usage));
+}
+async function usagePreview(install: boolean) {
+  try {
+    const p = await api.usageBarPreview(install);
+    usagePending = { install, fingerprint: p.fingerprint };
+    $("#usagepreviewpath").textContent = p.changes ? `Alterações em ${p.settingsPath}:` : "Nada a mudar.";
+    colorInto($("#usagediff"), p.diff || "(sem diferenças)");
+    $<HTMLButtonElement>("#usageapply").disabled = !p.changes;
+    $("#usagepreview").classList.remove("hidden");
+  } catch (e) {
+    alert(String(e));
+  }
+}
+$("#usageinstall").onclick = () => void usagePreview(true);
+$("#usageremove").onclick = () => void usagePreview(false);
+$("#usagecancel").onclick = () => $("#usagepreview").classList.add("hidden");
+$("#usageapply").onclick = async () => {
+  if (!usagePending) return;
+  try {
+    const backup = await api.usageBarApply(usagePending.install, usagePending.fingerprint);
+    $("#usagepreview").classList.add("hidden");
+    $("#usagestatus").textContent = `Gravado.${backup ? ` Backup: ${backup}` : ""}`;
+    window.setTimeout(refreshUsage, 1200);
+  } catch (e) {
+    alert(String(e));
+  }
+};
+
+// ── Sprites ──────────────────────────────────────────────────────────────────
+
+async function refreshSprites() {
+  const missing = await api.spritesMissing();
+  $("#ck-sprites").className = `dot ${missing === 0 ? "on" : ""}`;
+  $("#ck-sprites-text").textContent = missing === 0 ? "todos baixados" : `faltam ${missing} arquivos`;
+}
+async function downloadSprites(force: boolean) {
+  for (const id of ["#sprites-bar", "#sprites-bar-start"]) $(id).classList.remove("hidden");
+  try {
+    const r = await api.spritesDownload(force);
+    $("#spritesprog").textContent = `${r.downloaded} baixados${r.failed ? `, ${r.failed} falharam (sem internet?)` : ""}`;
+  } catch (e) {
+    $("#spritesprog").textContent = `Falhou: ${e}`;
+  }
+}
+$("#spritesdl").onclick = () => void downloadSprites(false);
+$("#spritesforce").onclick = () => void downloadSprites(true);
+$("#ck-sprites-btn").onclick = () => void downloadSprites(false);
 $("#sprites").onclick = () => void api.openSpritesFolder();
 $("#snipnow").onclick = () => void api.snipOpen();
 $("#resetxp").onclick = () => {
@@ -276,6 +478,13 @@ let pending: { install: boolean; fingerprint: string } | null = null;
 async function refreshHooks() {
   const s = await api.hooksStatus();
   $("#hookstatus").textContent = `${s.installed ? "✅ Instalados" : "⚪ Não instalados"} em ${s.settingsPath}${s.hookReady ? "" : " · ⚠️ relay não encontrado (rode npm run hook)"}`;
+  const info = await api.claudeInfo();
+  $("#ck-claude").className = `dot ${info.path ? (s.installed ? "on" : "half") : ""}`;
+  $("#ck-claude-text").textContent = info.path
+    ? s.installed
+      ? `${info.version ?? "instalado"} — conectado ao pet`
+      : `${info.version ?? "encontrado"} — falta instalar os hooks`
+    : "não encontrado (opcional)";
 }
 
 function colorDiff(diff: string) {
@@ -357,15 +566,51 @@ function animate(now: number) {
 async function boot() {
   state = await api.state();
   try {
+    usage = await api.usageGet();
+  } catch {
+    /* sem uso ainda */
+  }
+  try {
     await loadPacks(await api.customSprites());
   } catch {
     /* sem sprites reais */
   }
   render();
-  show("digimon");
+  show(state.onboarded ? "digimon" : "start");
   requestAnimationFrame(animate);
   void refreshHooks();
   void refreshClaude();
+  void refreshOpencode();
+  void refreshUsage();
+  await listen<Usage>("usage", (e) => {
+    usage = e.payload;
+    renderBattle();
+    $("#usagebox").replaceChildren(usageBlock(usage));
+  });
+  void refreshSprites();
+  try {
+    $<HTMLInputElement>("#autostart").checked = await api.autostartGet();
+  } catch {
+    /* sem suporte */
+  }
+  await listen<{ done: number; total: number; current: string }>("sprites-progress", (e) => {
+    const pct = `${(e.payload.done / e.payload.total) * 100}%`;
+    for (const id of ["#sprites-bar", "#sprites-bar-start"]) {
+      $(id).classList.remove("hidden");
+      ($(id).firstElementChild as HTMLElement).style.width = pct;
+    }
+    $("#spritesprog").textContent = `${e.payload.done}/${e.payload.total} · ${e.payload.current}`;
+    $("#ck-sprites-text").textContent = `baixando ${e.payload.done}/${e.payload.total}…`;
+  });
+  await listen("sprites-ready", async () => {
+    try {
+      await loadPacks(await api.customSprites());
+    } catch {
+      /* fica o desenho em código */
+    }
+    render();
+    void refreshSprites();
+  });
   $("#mcpcmd").textContent = await api.mcpCommand();
   await listen<PetState>("state-changed", (e) => {
     state = e.payload;
