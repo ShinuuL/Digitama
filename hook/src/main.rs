@@ -222,11 +222,28 @@ mod mcp {
         json!([
             {
                 "name": "screenshot",
-                "description": "Tira um print da tela do usuário (o monitor onde está o cursor, ou todos) e devolve a imagem. Use quando o usuário pedir para você olhar a tela dele.",
+                "description": "Tira um print da tela do usuário (o monitor onde está o cursor, ou todos) e devolve a imagem. Use quando o usuário pedir para você olhar a tela dele. Com `janela`, tira o print só de uma janela (ex.: o PDV), mesmo atrás de outras ou minimizada, sem roubar o foco; com `salvar_em`, grava o PNG em resolução cheia nessa pasta (ex.: validacao\\<chamado>\\img) como evidência.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "monitor": { "type": "string", "enum": ["cursor", "all"], "description": "cursor = só o monitor do mouse (padrão); all = todos os monitores" }
+                        "monitor": { "type": "string", "enum": ["cursor", "all"], "description": "cursor = só o monitor do mouse (padrão); all = todos os monitores. Ignorado com `janela`." },
+                        "janela": { "type": "string", "description": "Parte do título da janela (ex.: \"PDV\", \"Mastersys\"). Se houver mais de uma, a ferramenta devolve a lista com os ids." },
+                        "janela_id": { "type": "integer", "description": "Id de uma janela da lista devolvida antes (quando o título bateu com várias)." },
+                        "salvar_em": { "type": "string", "description": "Pasta onde gravar o PNG (relativa à pasta de trabalho ou absoluta). Criada se não existir." },
+                        "nome": { "type": "string", "description": "Nome do arquivo sem extensão. Padrão: data-hora + título da janela." }
+                    }
+                }
+            },
+            {
+                "name": "print_janela",
+                "description": "Tira o print de uma janela pelo título (ex.: o PDV ou o ERP), mesmo atrás de outras ou minimizada, sem roubar o foco, e salva o PNG em resolução cheia no caminho informado (ex.: validacao\\<chamado>\\img) como evidência. Devolve a imagem e o caminho do arquivo. Se o título bater com mais de uma janela, devolve a lista para escolher pelo `janela_id`.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "titulo": { "type": "string", "description": "Parte do título da janela (ex.: \"PDV\", \"ERP\", \"Mastersys\"), sem diferenciar maiúsculas." },
+                        "caminho": { "type": "string", "description": "Pasta onde gravar o PNG (relativa à pasta de trabalho ou absoluta). Criada se não existir. Sem ela, só devolve a imagem." },
+                        "nome": { "type": "string", "description": "Nome do arquivo sem extensão. Padrão: data-hora + título da janela." },
+                        "janela_id": { "type": "integer", "description": "Id de uma janela da lista devolvida antes." }
                     }
                 }
             },
@@ -293,10 +310,79 @@ mod mcp {
 
     const OFFLINE: &str = "O Digitama não está aberto (ou não respondeu). Abra o app Digitama e tente de novo.";
 
+    /// Print de uma janela. A pasta é resolvida aqui, na pasta de trabalho do
+    /// agente: o app roda em outro diretório.
+    fn window_shot(args: &Value) -> Value {
+        let mut req = json!({ "digitama_rpc": "screenshot" });
+        for key in ["janela", "janela_id", "nome"] {
+            if let Some(v) = args.get(key) {
+                req[key] = v.clone();
+            }
+        }
+        if let Some(dir) = args.get("salvar_em").and_then(Value::as_str).filter(|s| !s.trim().is_empty()) {
+            let path = std::path::Path::new(dir.trim());
+            let abs = if path.is_absolute() {
+                path.to_path_buf()
+            } else {
+                std::env::current_dir().unwrap_or_default().join(path)
+            };
+            req["pasta"] = json!(abs.to_string_lossy());
+        }
+        let Some(r) = rpc(req) else { return text(OFFLINE, true) };
+        if r.get("ok") != Some(&json!(true)) {
+            return text(r.get("error").and_then(Value::as_str).unwrap_or("Falha no print."), true);
+        }
+        if let Some(list) = r.get("janelas").and_then(Value::as_array) {
+            let lines: Vec<String> = list
+                .iter()
+                .map(|w| {
+                    format!(
+                        "- janela_id {}: {}",
+                        w.get("janela_id").and_then(Value::as_i64).unwrap_or(0),
+                        w.get("titulo").and_then(Value::as_str).unwrap_or_default()
+                    )
+                })
+                .collect();
+            return text(
+                format!("Mais de uma janela com esse título. Chame de novo com `janela_id`:\n{}", lines.join("\n")),
+                false,
+            );
+        }
+        let data = r.get("png").and_then(Value::as_str).unwrap_or_default();
+        let w = r.get("width").and_then(Value::as_u64).unwrap_or(0);
+        let h = r.get("height").and_then(Value::as_u64).unwrap_or(0);
+        let title = r.get("titulo").and_then(Value::as_str).unwrap_or_default();
+        let mut note = format!("Print da janela \"{title}\" ({w}×{h}).");
+        if let Some(path) = r.get("arquivo").and_then(Value::as_str) {
+            note.push_str(&format!(" Salvo em resolução cheia: {path}"));
+        }
+        if r.get("em_branco") == Some(&json!(true)) {
+            note.push_str(" Atenção: a imagem saiu de uma cor só; a janela pode não ter se desenhado.");
+        }
+        json!({ "content": [
+            { "type": "image", "data": data, "mimeType": "image/png" },
+            { "type": "text", "text": note }
+        ]})
+    }
+
     fn call(params: &Value) -> Value {
         let name = params.get("name").and_then(Value::as_str).unwrap_or_default();
         let args = params.get("arguments").cloned().unwrap_or_else(|| json!({}));
         match name {
+            "screenshot" if args.get("janela").is_some() || args.get("janela_id").is_some() => window_shot(&args),
+            "print_janela" => {
+                let mut a = args.clone();
+                if let Some(t) = args.get("titulo") {
+                    a["janela"] = t.clone();
+                }
+                if let Some(c) = args.get("caminho") {
+                    a["salvar_em"] = c.clone();
+                }
+                if a.get("janela").is_none() && a.get("janela_id").is_none() {
+                    return text("Informe `titulo` (parte do título da janela).", true);
+                }
+                window_shot(&a)
+            }
             "screenshot" => {
                 let monitor = args.get("monitor").and_then(Value::as_str).unwrap_or("cursor");
                 match rpc(json!({ "digitama_rpc": "screenshot", "monitor": monitor })) {

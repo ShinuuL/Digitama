@@ -73,6 +73,7 @@ export const api = {
   snipOpen: () => invoke("snip_open"),
   snipImage: () => invoke<Shot>("snip_image"),
   snipClose: () => invoke("snip_close"),
+  snipReady: () => invoke("snip_ready"),
   savePng: (png: string) => invoke<string>("save_png", { png }),
   copyPng: (png: string) => invoke("copy_png", { png }),
   attachToChat: (png: string, width: number, height: number) => invoke("attach_to_chat", { png, width, height }),

@@ -1,13 +1,14 @@
 //! Print da tela com GDI (BitBlt), reduzido para no máximo MAX_W×MAX_H e
-//! codificado em PNG. Nada é gravado em disco: a imagem vai direto para o chat
-//! ou para quem chamou a ferramenta MCP.
+//! codificado em PNG. A imagem vai direto para o chat ou para quem chamou a
+//! ferramenta MCP; só o print de janela (`capture_window`) pode ir para disco,
+//! na pasta que o agente pedir (evidência de validação).
 
 use base64::Engine;
 use windows::Win32::Foundation::POINT;
 use windows::Win32::Graphics::Gdi::{
     BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject, GetDC, GetDIBits,
     GetMonitorInfoW, MonitorFromPoint, ReleaseDC, SelectObject, BITMAPINFO, BITMAPINFOHEADER, BI_RGB,
-    CAPTUREBLT, DIB_RGB_COLORS, MONITORINFO, MONITOR_DEFAULTTONEAREST, SRCCOPY,
+    CAPTUREBLT, DIB_RGB_COLORS, HDC, MONITORINFO, MONITOR_DEFAULTTONEAREST, SRCCOPY,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     GetSystemMetrics, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN,
@@ -114,6 +115,143 @@ pub fn copy_png_to_clipboard(png_bytes: &[u8]) -> Result<(), String> {
     }
 }
 
+// ── Print de uma janela ─────────────────────────────────────────────────────
+
+pub struct WindowInfo {
+    pub hwnd: isize,
+    pub title: String,
+}
+
+pub struct WindowShot {
+    /// Reduzido (vai para o Claude).
+    pub shot: Shot,
+    /// Resolução cheia, só quando pedido (evidência em disco).
+    pub full_png: Option<Vec<u8>>,
+    pub title: String,
+    /// Imagem de uma cor só: a janela provavelmente não se desenhou.
+    pub blank: bool,
+}
+
+/// Janelas principais visíveis (ou minimizadas) de outros processos cujo
+/// título contém `query`, sem diferenciar maiúsculas.
+pub fn find_windows(query: &str) -> Vec<WindowInfo> {
+    use windows::core::BOOL;
+    use windows::Win32::Foundation::{HWND, LPARAM};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        EnumWindows, GetWindow, GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId, IsWindowVisible,
+        GW_OWNER,
+    };
+    struct Ctx {
+        query: String,
+        me: u32,
+        found: Vec<WindowInfo>,
+    }
+    unsafe extern "system" fn each(hwnd: HWND, lp: LPARAM) -> BOOL {
+        let ctx = &mut *(lp.0 as *mut Ctx);
+        if !IsWindowVisible(hwnd).as_bool() || GetWindow(hwnd, GW_OWNER).is_ok_and(|o| !o.is_invalid()) {
+            return true.into();
+        }
+        let mut pid = 0u32;
+        GetWindowThreadProcessId(hwnd, Some(&mut pid));
+        if pid == ctx.me {
+            return true.into();
+        }
+        let len = GetWindowTextLengthW(hwnd);
+        if len <= 0 {
+            return true.into();
+        }
+        let mut buf = vec![0u16; len as usize + 1];
+        let n = GetWindowTextW(hwnd, &mut buf);
+        let title = String::from_utf16_lossy(&buf[..n.max(0) as usize]);
+        if title.to_lowercase().contains(&ctx.query) {
+            ctx.found.push(WindowInfo { hwnd: hwnd.0 as isize, title });
+        }
+        true.into()
+    }
+    let mut ctx = Ctx { query: query.trim().to_lowercase(), me: std::process::id(), found: Vec::new() };
+    unsafe {
+        let _ = EnumWindows(Some(each), LPARAM(&mut ctx as *mut Ctx as isize));
+    }
+    ctx.found
+}
+
+/// Print de uma janela com PrintWindow(PW_RENDERFULLCONTENT): sem esse modo o
+/// JavaFX (PDV) e janelas com aceleração de vídeo saem pretos. Janela
+/// minimizada não é desenhada, então é restaurada sem roubar o foco e
+/// minimizada de novo no fim.
+pub fn capture_window(hwnd: isize, keep_full: bool) -> Result<WindowShot, String> {
+    use windows::Win32::Foundation::{HWND, RECT};
+    use windows::Win32::Storage::Xps::{PrintWindow, PRINT_WINDOW_FLAGS};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetWindowRect, GetWindowTextW, IsIconic, IsWindow, ShowWindow, SW_SHOWMINNOACTIVE, SW_SHOWNOACTIVATE,
+    };
+    const PW_RENDERFULLCONTENT: u32 = 2;
+    let hwnd = HWND(hwnd as *mut _);
+    unsafe {
+        if !IsWindow(Some(hwnd)).as_bool() {
+            return Err("a janela não existe mais".into());
+        }
+        let mut buf = [0u16; 512];
+        let n = GetWindowTextW(hwnd, &mut buf);
+        let title = String::from_utf16_lossy(&buf[..n.max(0) as usize]);
+
+        let was_min = IsIconic(hwnd).as_bool();
+        if was_min {
+            let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+            // a animação de restaurar e o primeiro quadro do app
+            std::thread::sleep(std::time::Duration::from_millis(450));
+        }
+        let result = (|| {
+            let mut r = RECT::default();
+            GetWindowRect(hwnd, &mut r).map_err(|e| format!("não li o tamanho da janela: {e}"))?;
+            let (w, h) = (r.right - r.left, r.bottom - r.top);
+            if w <= 0 || h <= 0 {
+                return Err("janela sem tamanho".to_string());
+            }
+            let bgra = grab_with(w, h, |mem, _| {
+                if PrintWindow(hwnd, mem, PRINT_WINDOW_FLAGS(PW_RENDERFULLCONTENT)).as_bool() {
+                    Ok(())
+                } else {
+                    Err("PrintWindow falhou".into())
+                }
+            })?;
+            Ok((bgra, w as u32, h as u32))
+        })();
+        if was_min {
+            let _ = ShowWindow(hwnd, SW_SHOWMINNOACTIVE);
+        }
+        let (bgra, w, h) = result?;
+        let blank = bgra.chunks_exact(4).all(|p| p[..3] == bgra[..3]);
+        let full_png = if keep_full {
+            let mut rgb = Vec::with_capacity((w * h * 3) as usize);
+            for px in bgra.chunks_exact(4) {
+                rgb.extend_from_slice(&[px[2], px[1], px[0]]);
+            }
+            Some(encode_png(&rgb, w, h)?)
+        } else {
+            None
+        };
+        let (rgb, ow, oh) = downscale(&bgra, w, h);
+        let png = encode_png(&rgb, ow, oh)?;
+        let shot = Shot { png_base64: base64::engine::general_purpose::STANDARD.encode(png), width: ow, height: oh };
+        Ok(WindowShot { shot, full_png, title, blank })
+    }
+}
+
+/// "2026-10-21_14-03-07" na hora local, para o nome do arquivo de evidência.
+pub fn local_stamp() -> String {
+    use windows::Win32::System::SystemInformation::GetLocalTime;
+    let t = unsafe { GetLocalTime() };
+    format!("{:04}-{:02}-{:02}_{:02}-{:02}-{:02}", t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute, t.wSecond)
+}
+
+/// Título → pedaço seguro de nome de arquivo.
+pub fn file_slug(title: &str) -> String {
+    let s: String = title.chars().map(|c| if c.is_alphanumeric() || c == '-' { c } else { '_' }).collect();
+    let s: String = s.split('_').filter(|p| !p.is_empty()).collect::<Vec<_>>().join("_").chars().take(40).collect();
+    if s.is_empty() { "janela".into() } else { s }
+}
+
 fn virtual_screen() -> (i32, i32, i32, i32) {
     unsafe {
         (
@@ -140,6 +278,13 @@ fn cursor_monitor() -> Result<(i32, i32, i32, i32), String> {
 
 /// Os pixels da área, em BGRA de cima para baixo.
 fn grab(x: i32, y: i32, w: i32, h: i32) -> Result<Vec<u8>, String> {
+    grab_with(w, h, |mem, screen| unsafe {
+        BitBlt(mem, 0, 0, w, h, Some(screen), x, y, SRCCOPY | CAPTUREBLT).map_err(|e| format!("BitBlt falhou: {e}"))
+    })
+}
+
+/// Bitmap w×h compatível com a tela; `paint` desenha nele (BitBlt, PrintWindow).
+fn grab_with(w: i32, h: i32, paint: impl FnOnce(HDC, HDC) -> Result<(), String>) -> Result<Vec<u8>, String> {
     unsafe {
         let screen = GetDC(None);
         if screen.is_invalid() {
@@ -148,7 +293,7 @@ fn grab(x: i32, y: i32, w: i32, h: i32) -> Result<Vec<u8>, String> {
         let mem = CreateCompatibleDC(Some(screen));
         let bitmap = CreateCompatibleBitmap(screen, w, h);
         let old = SelectObject(mem, bitmap.into());
-        let blit = BitBlt(mem, 0, 0, w, h, Some(screen), x, y, SRCCOPY | CAPTUREBLT);
+        let blit = paint(mem, screen);
 
         let mut info = BITMAPINFO {
             bmiHeader: BITMAPINFOHEADER {
@@ -170,7 +315,7 @@ fn grab(x: i32, y: i32, w: i32, h: i32) -> Result<Vec<u8>, String> {
         let _ = DeleteDC(mem);
         ReleaseDC(None, screen);
 
-        blit.map_err(|e| format!("BitBlt falhou: {e}"))?;
+        blit?;
         if lines == 0 {
             return Err("GetDIBits falhou".into());
         }
@@ -239,5 +384,11 @@ mod tests {
         assert_eq!(&rgb[..3], &[30, 20, 10]);
         let (_, sw, sh) = downscale(&bgra[..(100 * 50 * 4)], 100, 50);
         assert_eq!((sw, sh), (100, 50));
+    }
+
+    #[test]
+    fn nome_de_arquivo_sem_caracteres_proibidos() {
+        assert_eq!(file_slug("PDV - Mastersys: Caixa 01"), "PDV_-_Mastersys_Caixa_01");
+        assert_eq!(file_slug("***"), "janela");
     }
 }

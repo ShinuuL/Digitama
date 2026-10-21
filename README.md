@@ -6,7 +6,7 @@ Um pet em pixel art, inspirado em Digimon, que vive na área de trabalho do Wind
 - **Mostra um balão interativo quando o agente pergunta ou pede permissão**: você responde ali mesmo (Permitir/Negar, ou as opções de um `AskUserQuestion` do Claude Code), ou clica em "Responder no…" e o pet traz a janela do agente para frente.
 - **Chat com a IA pelo agente que você já usa**: o Claude Code logado (assinatura claude.ai, sem chave de API) ou o OpenCode (qualquer provedor configurado nele — OpenAI, Gemini, Anthropic, Ollama…), com print da tela e a persona do Digimon.
 - **Captura estilo Lightshot**, com anotações, copiar, salvar ou mandar para a IA.
-- **Servidor MCP próprio**: o Claude ganha as ferramentas `screenshot`, `pet_say`, `pet_attack` e `pet_status`.
+- **Servidor MCP próprio**: o Claude ganha as ferramentas `screenshot`, `pet_say`, `pet_attack` e `pet_status`. O `screenshot` também tira print de uma janela só (`janela: "PDV"`), mesmo minimizada e sem roubar o foco, e grava o PNG como evidência (`salvar_em: "validacao/<chamado>/img"`).
 - **Dança com notas musicais** quando o Spotify está tocando e em foco.
 - **Três linhas evolutivas**, do ovo ao Supremo, com os sprites do Digimon World DS:
   - Botamon → Koromon → **Agumon** → Greymon → MetalGreymon → **WarGreymon**

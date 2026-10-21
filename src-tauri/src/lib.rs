@@ -234,10 +234,6 @@ async fn capture_clean(app: &AppHandle, hide: &[&str]) -> Result<Value, String> 
 /// Recorte estilo Lightshot: congela o monitor do cursor (sem o pet e o chat)
 /// e abre por cima dele uma janela sem bordas para selecionar e anotar.
 async fn open_snip(app: AppHandle) {
-    if let Some(old) = app.get_webview_window("snip") {
-        let _ = old.close();
-        tokio::time::sleep(Duration::from_millis(120)).await;
-    }
     let mut hidden = Vec::new();
     for label in ["pet", "chat"] {
         if let Some(w) = app.get_webview_window(label) {
@@ -266,7 +262,30 @@ async fn open_snip(app: AppHandle) {
     };
     *app.state::<Snip>().0.lock().unwrap() =
         Some(json!({ "png": shot.png_base64, "width": shot.width, "height": shot.height }));
-    let built = WebviewWindowBuilder::new(&app, "snip", WebviewUrl::App("snip.html".into()))
+    // A janela já existe (pré-criada escondida): só reposiciona e avisa. A
+    // própria página chama `snip_ready` para aparecer quando o print carregou.
+    let win = match app.get_webview_window("snip") {
+        Some(win) => {
+            let _ = win.set_position(PhysicalPosition::new(x, y));
+            let _ = win.set_size(tauri::PhysicalSize::new(w as u32, h as u32));
+            let _ = app.emit_to("snip", "snip-load", ());
+            return;
+        }
+        None => build_snip(&app),
+    };
+    match win {
+        Ok(win) => {
+            let _ = win.set_position(PhysicalPosition::new(x, y));
+            let _ = win.set_size(tauri::PhysicalSize::new(w as u32, h as u32));
+        }
+        Err(e) => eprintln!("[digitama] não abri a captura: {e}"),
+    }
+}
+
+/// A janela do recorte, escondida. Criada no início (em contexto assíncrono)
+/// e reaproveitada: montar uma WebView a cada Print levava segundos.
+fn build_snip(app: &AppHandle) -> tauri::Result<tauri::WebviewWindow> {
+    WebviewWindowBuilder::new(app, "snip", WebviewUrl::App("snip.html".into()))
         .title("Digitama — Captura")
         .decorations(false)
         .always_on_top(true)
@@ -274,17 +293,7 @@ async fn open_snip(app: AppHandle) {
         .resizable(false)
         .shadow(false)
         .visible(false)
-        .build();
-    match built {
-        Ok(win) => {
-            let _ = win.set_position(PhysicalPosition::new(x, y));
-            let _ = win.set_size(tauri::PhysicalSize::new(w as u32, h as u32));
-            let _ = win.show();
-            let _ = win.set_focus();
-            let _ = app.emit_to("pet", "pet-flash", ());
-        }
-        Err(e) => eprintln!("[digitama] não abri a captura: {e}"),
-    }
+        .build()
 }
 
 async fn screenshot_to_chat(app: AppHandle) {
@@ -404,7 +413,17 @@ fn snip_image(snip: State<Snip>) -> Option<Value> {
 fn snip_close(app: AppHandle) {
     app.state::<Snip>().0.lock().unwrap().take();
     if let Some(w) = app.get_webview_window("snip") {
-        let _ = w.close();
+        let _ = w.hide();
+    }
+}
+
+/// O print novo já está desenhado na página: mostra a janela.
+#[tauri::command]
+fn snip_ready(app: AppHandle) {
+    if let Some(w) = app.get_webview_window("snip") {
+        let _ = w.show();
+        let _ = w.set_focus();
+        let _ = app.emit_to("pet", "pet-flash", ());
     }
 }
 
@@ -789,6 +808,16 @@ pub fn run() {
                 open_window_later(&handle, "settings");
             }
             install_bundled_sprites(&handle);
+            {
+                let app = handle.clone();
+                tauri::async_runtime::spawn(async move {
+                    if app.get_webview_window("snip").is_none() {
+                        if let Err(e) = build_snip(&app) {
+                            eprintln!("[digitama] não pré-criei a captura: {e}");
+                        }
+                    }
+                });
+            }
             if sprites::missing(&sprites_dir(&handle)) > 0 {
                 let app = handle.clone();
                 tauri::async_runtime::spawn(async move {
@@ -837,6 +866,7 @@ pub fn run() {
             snip_open,
             snip_image,
             snip_close,
+            snip_ready,
             save_png,
             copy_png,
             attach_to_chat,

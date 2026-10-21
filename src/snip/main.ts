@@ -3,6 +3,7 @@
 // marca-texto, texto) e escolhe: copiar, salvar ou mandar para o Claude.
 import "../shared/digivice.css";
 import "./snip.css";
+import { listen } from "@tauri-apps/api/event";
 import { api, type Shot } from "../shared/api";
 import { iconImg } from "../shared/icons";
 
@@ -21,16 +22,24 @@ interface Mark {
 }
 
 const COLORS = ["#ff3b3b", "#ffd23f", "#3dff8a", "#3fe0ff", "#4d6bff", "#c48bff", "#ffffff", "#0b0820"];
-const W = window.innerWidth;
-const H = window.innerHeight;
+// A janela é criada uma vez, escondida, e reaproveitada a cada captura (criar
+// uma WebView demora): o tamanho muda conforme o monitor.
+let W = window.innerWidth;
+let H = window.innerHeight;
 
 const canvas = document.createElement("canvas");
-const dpr = window.devicePixelRatio || 1;
-canvas.width = Math.round(W * dpr);
-canvas.height = Math.round(H * dpr);
 document.body.appendChild(canvas);
 const g = canvas.getContext("2d")!;
-g.scale(dpr, dpr);
+
+function fitCanvas() {
+  W = window.innerWidth;
+  H = window.innerHeight;
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = Math.round(W * dpr);
+  canvas.height = Math.round(H * dpr);
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+fitCanvas();
 
 const hud = document.createElement("div");
 hud.className = "hud";
@@ -473,21 +482,55 @@ function close() {
 
 // ── Início ───────────────────────────────────────────────────────────────────
 
+let scanStart = performance.now();
+let ticking = false;
+
+/** Carrega o print novo, zera a captura anterior e pede para mostrar a janela. */
+async function load() {
+  const next = await api.snipImage();
+  if (!next) return; // janela pré-criada: espera a primeira captura
+  const image = new Image();
+  image.src = `data:image/png;base64,${next.png}`;
+  await image.decode();
+  shot = next;
+  img = image;
+  sel = null;
+  marks = [];
+  drawing = null;
+  drag = null;
+  busy = false;
+  setTool(null);
+  document.querySelectorAll(".text-input").forEach((el) => el.remove());
+  toast.classList.add("hidden");
+  palette.classList.add("hidden");
+  fitCanvas();
+  mouse = { x: W / 2, y: H / 2 };
+  layout();
+  scanStart = performance.now();
+  draw();
+  await api.snipReady();
+  window.focus();
+  if (!ticking) {
+    ticking = true;
+    const tick = () => {
+      scanY = ((performance.now() - scanStart) / 380) * H;
+      draw();
+      requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  }
+}
+
+window.addEventListener("resize", () => {
+  fitCanvas();
+  layout();
+  draw();
+});
+
 async function boot() {
   await document.fonts.load("8px 'Press Start 2P'").catch(() => {});
-  shot = await api.snipImage();
-  if (!shot) return close();
-  img = new Image();
-  img.src = `data:image/png;base64,${shot.png}`;
-  await img.decode();
-  const start = performance.now();
-  const tick = () => {
-    scanY = ((performance.now() - start) / 380) * H;
-    draw();
-    requestAnimationFrame(tick);
-  };
-  requestAnimationFrame(tick);
-  window.focus();
+  await listen("snip-load", () => void load());
+  await load();
 }
 
 void boot();

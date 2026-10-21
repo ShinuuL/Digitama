@@ -163,6 +163,20 @@ async fn drain_then_disconnect(mut pipe: NamedPipeServer) {
 
 async fn serve_rpc(app: &AppHandle, rpc: &str, payload: &Value) -> Value {
     match rpc {
+        "screenshot" if payload.get("janela").is_some() || payload.get("janela_id").is_some() => {
+            let payload = payload.clone();
+            let res = tauri::async_runtime::spawn_blocking(move || window_shot(&payload)).await;
+            match res {
+                Ok(Ok(v)) => {
+                    if v.get("png").is_some() {
+                        let _ = app.emit_to("pet", "pet-flash", ());
+                    }
+                    v
+                }
+                Ok(Err(e)) => json!({ "ok": false, "error": e }),
+                Err(e) => json!({ "ok": false, "error": e.to_string() }),
+            }
+        }
         "screenshot" => {
             let all = payload.get("monitor").and_then(Value::as_str) == Some("all");
             let shot = tauri::async_runtime::spawn_blocking(move || crate::screen::capture(all)).await;
@@ -199,6 +213,56 @@ async fn serve_rpc(app: &AppHandle, rpc: &str, payload: &Value) -> Value {
         }
         other => json!({ "ok": false, "error": format!("rpc desconhecido: {other}") }),
     }
+}
+
+/// Print de uma janela (ferramenta MCP `screenshot` com `janela`). Com mais de
+/// uma janela pelo título, devolve a lista para o agente escolher pelo id.
+/// Com `pasta` (caminho absoluto, já resolvido pelo relay), grava o PNG em
+/// resolução cheia lá: o print vira a evidência da validação.
+fn window_shot(payload: &Value) -> Result<Value, String> {
+    use crate::screen;
+    let hwnd = match payload.get("janela_id").and_then(Value::as_i64) {
+        Some(id) => id as isize,
+        None => {
+            let query = payload.get("janela").and_then(Value::as_str).unwrap_or_default();
+            if query.trim().is_empty() {
+                return Err("informe parte do título da janela".into());
+            }
+            let found = screen::find_windows(query);
+            match found.len() {
+                0 => return Err(format!("nenhuma janela aberta com \"{query}\" no título")),
+                1 => found[0].hwnd,
+                _ => {
+                    let list: Vec<Value> =
+                        found.iter().map(|w| json!({ "janela_id": w.hwnd as i64, "titulo": w.title })).collect();
+                    return Ok(json!({ "ok": true, "janelas": list }));
+                }
+            }
+        }
+    };
+    let folder = payload.get("pasta").and_then(Value::as_str).filter(|s| !s.trim().is_empty());
+    let shot = screen::capture_window(hwnd, folder.is_some())?;
+    let mut saved = Value::Null;
+    if let (Some(folder), Some(bytes)) = (folder, &shot.full_png) {
+        let dir = std::path::PathBuf::from(folder);
+        std::fs::create_dir_all(&dir).map_err(|e| format!("não criei a pasta {folder}: {e}"))?;
+        let name = match payload.get("nome").and_then(Value::as_str).map(|n| screen::file_slug(n.trim_end_matches(".png"))) {
+            Some(n) => format!("{n}.png"),
+            None => format!("{}_{}.png", screen::local_stamp(), screen::file_slug(&shot.title)),
+        };
+        let path = dir.join(name);
+        std::fs::write(&path, bytes).map_err(|e| format!("não gravei {}: {e}", path.display()))?;
+        saved = json!(path.to_string_lossy());
+    }
+    Ok(json!({
+        "ok": true,
+        "png": shot.shot.png_base64,
+        "width": shot.shot.width,
+        "height": shot.shot.height,
+        "titulo": shot.title,
+        "em_branco": shot.blank,
+        "arquivo": saved,
+    }))
 }
 
 async fn wait_for_decision(rx: &mut mpsc::Receiver<Reply>) -> Option<String> {
