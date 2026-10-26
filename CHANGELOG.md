@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.4.2 — 26/10/2026
+
+- **Extensão Digitama OpenCode 0.5.3** (`digitama-opencode-0.5.3.vsix` no release; quem tem a 0.5.x recebe o aviso de atualização):
+  - **Ctrl+C no Explorer, Ctrl+V no chat:** o arquivo entra pelo caminho real, lido da área de transferência do Windows, sem cópia e sem limite de tamanho. Um `.zip`, por exemplo, vai como caminho.
+  - **Ctrl+V de prints** e de arquivos sem caminho: vira anexo (até 8 MB), com a mesma regra do clipe.
+  - **Botão de copiar** em cada resposta do modelo.
+  - O seletor do clipe volta a mostrar os arquivos (no Windows, arquivos + pastas no mesmo seletor virava um seletor só de pastas).
+
 ## v0.4.1 — 26/10/2026
 
 - **Extensão Digitama OpenCode 0.5.1** (`digitama-opencode-0.5.1.vsix` no release):
