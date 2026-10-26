@@ -1,6 +1,7 @@
 // Host da extensão: fala com o serviço do OpenCode (opencode.ts) e repassa à
 // webview (media/main.js), que só desenha. A conversa trabalha na pasta aberta
 // no VS Code: a extensão nunca escolhe pasta sozinha.
+import { execFile } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as vscode from "vscode";
@@ -68,6 +69,22 @@ export function activate(ctx: vscode.ExtensionContext) {
 }
 
 export function deactivate() {}
+
+/**
+ * Caminhos dos arquivos copiados no Explorer (lista CF_HDROP da área de
+ * transferência). Só lê; nunca muda o que está copiado. Fora do Windows, vazio.
+ */
+function caminhosCopiados(): Promise<string[]> {
+  if (process.platform !== "win32") return Promise.resolve([]);
+  const script = "[Console]::OutputEncoding = [Text.Encoding]::UTF8; Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.Clipboard]::GetFileDropList() | ForEach-Object { $_ }";
+  return new Promise((resolve) => {
+    // Windows PowerShell 5.1 (STA, tem o Clipboard do Windows Forms) vem em todo Windows 10/11
+    execFile("powershell.exe", ["-NoProfile", "-NonInteractive", "-STA", "-Command", script], { windowsHide: true, timeout: 5000 }, (err, out) => {
+      if (err) return resolve([]);
+      resolve(String(out).split(/\r?\n/).map((l) => l.trim()).filter(Boolean));
+    });
+  });
+}
 
 class Painel implements vscode.WebviewViewProvider {
   private view?: vscode.WebviewView;
@@ -471,6 +488,22 @@ class Painel implements vscode.WebviewViewProvider {
         return vscode.commands.executeCommand("digitamaOpencode.config", m.aba);
       case "enviar":
         return this.enviar(String(m.texto ?? ""), Array.isArray(m.anexos) ? m.anexos : []);
+      case "colar": {
+        // Ctrl+C num arquivo do Explorer guarda o caminho real: usa ele (sem copiar nada)
+        const nomes: string[] = (Array.isArray(m.nomes) ? m.nomes : []).map((n: unknown) => String(n ?? ""));
+        const caminhos = await caminhosCopiados();
+        const entrada = this.modelos.find((x) => x.id === (this.atual?.model ?? this.modelo)?.id && x.providerID === (this.atual?.model ?? this.modelo)?.providerID)?.entrada ?? [];
+        const achados: Anexo[] = [];
+        const faltam: string[] = [];
+        for (const nome of nomes) {
+          const p = caminhos.find((c) => path.basename(c).toLowerCase() === nome.toLowerCase());
+          if (p) achados.push(classificar(p, entrada));
+          else faltam.push(nome);
+        }
+        if (achados.length) this.post({ tipo: "anexos", itens: achados });
+        if (faltam.length) this.post({ tipo: "enviarConteudo", nomes: faltam });
+        return;
+      }
       case "colarArquivos": {
         // a webview não sabe o caminho do que foi colado: grava numa pasta da extensão e classifica como no clipe
         const dir = path.join(this.ctx.globalStorageUri.fsPath, "anexos");

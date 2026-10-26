@@ -139,11 +139,15 @@
     if (itens.length) enviar({ tipo: "colarArquivos", itens });
     if (grandes.length) mostrarAviso("Grande demais para colar (mais de 8 MB): " + grandes.join(", ") + ". Use o clipe, que anexa pelo caminho.", "info");
   }
+  // Ctrl+V de arquivos: primeiro só os nomes; o host lê os caminhos reais do Windows (Ctrl+C no Explorer)
+  // e só pede o conteúdo do que não tem caminho (um print, por exemplo)
+  let pendentes = [];
   texto.addEventListener("paste", (e) => {
     const arquivos = [...(e.clipboardData?.files || [])];
     if (arquivos.length) {
       e.preventDefault();
-      void colarArquivos(arquivos);
+      pendentes = arquivos;
+      enviar({ tipo: "colar", nomes: arquivos.map((f) => f.name || "") });
       return;
     }
     const t = e.clipboardData?.getData("text/plain") || "";
@@ -837,7 +841,11 @@
     else if (m.tipo === "aviso") mostrarAviso(m.texto, m.nivel, m.acao);
     else if (m.tipo === "menu") abrirMenu(m.qual);
     else if (m.tipo === "ajuda") ajuda();
-    else if (m.tipo === "anexos") {
+    else if (m.tipo === "enviarConteudo") {
+      const faltam = new Set(m.nomes);
+      void colarArquivos(pendentes.filter((f) => faltam.has(f.name || "")));
+      pendentes = [];
+    } else if (m.tipo === "anexos") {
       anexos.push(...m.itens);
       desenharAnexos();
       texto.focus();

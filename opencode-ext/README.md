@@ -6,7 +6,7 @@ Interface do OpenCode v2 no painel lateral do VS Code.
 - **Agente e modelo** por conversa. O menu de modelos tem busca, filtro "só grátis" e seções por provedor que abrem e fecham (a do modelo atual vem aberta e primeiro).
 - **Bola de contexto:** enche conforme os tokens do último passo em relação a `limit.context` do modelo. Ciano até 60%, dourado até 85%, vermelho acima disso. Ela aparece também na barra de status.
 - **Uso dos modelos grátis (janela de 5 h):** os modelos grátis de um provedor dividem a mesma cota (trocar Big Pickle por DeepSeek não escapa do bloqueio); cada modelo mostra o uso da cota e o seu próprio. O uso vem do próprio serviço do OpenCode (`/api/experimental/session/stats`), então soma todas as janelas do VS Code, o TUI, o celular e os subagentes; o limite aprendido e o bloqueio ficam num arquivo compartilhado entre as janelas. O limite não é publicado, então é aprendido: na primeira recusa por cota (`FreeUsageLimitError`, "rate limit", 429) a extensão guarda o uso daquele momento como limite, marca a cota inteira como esgotada até a janela liberar e oferece trocar de modelo. Daí em diante aparece a barra "usado de ~limite". O uso aparece no topo do painel (pílula ao lado do contexto) e, por modelo, no menu de modelos.
-- **Anexos:** clipe na caixa de mensagem (vários arquivos de uma vez). Texto e arquivos que o modelo lê (imagem, PDF, áudio, vídeo, conforme o modelo) vão como arquivo; o resto (binários como .zip, mídia que o modelo não lê, mais de 8 MB) vai como caminho no texto, para o agente abrir. Texto colado com mais de 2 linhas vira um `.txt` anexado. **Ctrl+V** também cola arquivos copiados no Explorer e prints (até 8 MB): a extensão grava o colado numa pasta dela (apagada depois de 1 dia) e aplica a mesma regra. Cada resposta tem um botão de copiar, e o Ctrl+C na seleção é o nativo.
+- **Anexos:** clipe na caixa de mensagem (vários arquivos de uma vez). Texto e arquivos que o modelo lê (imagem, PDF, áudio, vídeo, conforme o modelo) vão como arquivo; o resto (binários como .zip, mídia que o modelo não lê, mais de 8 MB) vai como caminho no texto, para o agente abrir. Texto colado com mais de 2 linhas vira um `.txt` anexado. **Ctrl+C num arquivo do Explorer e Ctrl+V no chat** anexa pelo **caminho real** (lido da área de transferência do Windows, sem copiar nada e sem limite de tamanho), com a mesma regra do clipe. O que não tem caminho, como um print, é gravado numa pasta da extensão (apagada depois de 1 dia), até 8 MB. Cada resposta tem um botão de copiar, e o Ctrl+C na seleção é o nativo.
 - **Respostas em tempo real**, com as ferramentas usadas e o raciocínio (recolhível).
 - **Modos de permissão** (vão como regras da sessão, valem até com o painel fechado):
   - *Perguntar*: confirma edições, comandos e web; leituras seguem livres.
@@ -38,5 +38,5 @@ O serviço escuta apenas em `127.0.0.1`. O link funciona direto neste PC. Para o
 npm install
 npm test          # compila e roda os testes
 npm run package   # gera o .vsix
-code --install-extension digitama-opencode-0.5.2.vsix
+code --install-extension digitama-opencode-0.5.3.vsix
 ```
