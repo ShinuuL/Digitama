@@ -464,7 +464,8 @@ class Painel implements vscode.WebviewViewProvider {
       case "enviar":
         return this.enviar(String(m.texto ?? ""), Array.isArray(m.anexos) ? m.anexos : []);
       case "anexar": {
-        const uris = await vscode.window.showOpenDialog({ canSelectMany: true, canSelectFiles: true, canSelectFolders: true, openLabel: "Anexar", defaultUri: vscode.workspace.workspaceFolders?.[0]?.uri });
+        // no Windows/Linux, arquivos + pastas no mesmo seletor vira um seletor só de pastas: aqui são só arquivos
+        const uris = await vscode.window.showOpenDialog({ canSelectMany: true, canSelectFiles: true, canSelectFolders: false, openLabel: "Anexar", title: "Anexar arquivos", defaultUri: vscode.workspace.workspaceFolders?.[0]?.uri });
         if (!uris?.length) return;
         const entrada = this.modelos.find((x) => x.id === (this.atual?.model ?? this.modelo)?.id && x.providerID === (this.atual?.model ?? this.modelo)?.providerID)?.entrada ?? [];
         return this.post({ tipo: "anexos", itens: uris.map((u) => classificar(u.fsPath, entrada)) });
