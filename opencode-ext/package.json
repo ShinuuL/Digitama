@@ -2,7 +2,7 @@
   "name": "digitama-opencode",
   "displayName": "Digitama OpenCode",
   "description": "Interface do OpenCode v2 no painel do VS Code: conversas, agentes, permissões, bola de contexto e pareamento (/pair).",
-  "version": "0.4.5",
+  "version": "0.5.0",
   "publisher": "mastersys",
   "private": true,
   "license": "UNLICENSED",
@@ -68,6 +68,10 @@
         "command": "digitamaOpencode.config",
         "title": "OpenCode: Configurações",
         "icon": "$(gear)"
+      },
+      {
+        "command": "digitamaOpencode.verificarAtualizacoes",
+        "title": "OpenCode: Verificar atualizações (OpenCode e extensão)"
       }
     ],
     "configuration": {
@@ -77,6 +81,16 @@
           "type": "string",
           "default": "",
           "description": "Caminho do opencode. Vazio = procurar no PATH e em %APPDATA%\\npm."
+        },
+        "digitamaOpencode.atualizacoes.automatico": {
+          "type": "boolean",
+          "default": true,
+          "description": "Verificar sozinho (a cada 6 h) se há versão nova do OpenCode e desta extensão. Só instala com o seu clique."
+        },
+        "digitamaOpencode.atualizacoes.repositorio": {
+          "type": "string",
+          "default": "ShinuuL/Digitama",
+          "description": "Repositório do GitHub (dono/nome) cujos releases trazem o .vsix desta extensão."
         }
       }
     },

@@ -31,6 +31,7 @@
     { id: "tema", nome: "Tema", icone: "sparkle" },
     { id: "conexoes", nome: "Conexões", icone: "globe" },
     { id: "mcps", nome: "MCPs", icone: "tool" },
+    { id: "atualizacoes", nome: "Atualizações", icone: "refresh" },
   ];
 
   let S = { aba: (vs.getState() || {}).aba || "tema", tema: null, conexoes: [], estados: {}, mcps: null, provedores: [], relay: false, erro: "", nova: null, novoMcp: null, removendo: null };
@@ -110,6 +111,34 @@
         h("button", { class: "sec", onclick: () => enviar({ tipo: "provedorLogin" }) }, I("zap", 13), "Conectar provedor (opencode auth login)")));
   }
 
+  // ── atualizações ──
+  function abaAtualizacoes() {
+    const A = S.atual;
+    if (!A || A.carregando || !A.situacao) {
+      if (!A) setTimeout(() => enviar({ tipo: "atualizacoes" }), 0);
+      return h("div", { class: "secoes" }, h("p", { class: "muted" }, "Verificando versões…"));
+    }
+    const s = A.situacao;
+    const quando = new Date(s.verificadoEm).toLocaleString("pt-BR", { dateStyle: "short", timeStyle: "short" });
+    const cartao = (icone, nome, atual, nova, erro, botao, extra) => h("div", { class: "conexao", "data-st": nova ? "pendente" : erro ? "ausente" : "ok" },
+      h("span", { class: "selo" }, I(icone, 18)),
+      h("div", { class: "info" },
+        h("div", { class: "nome" }, h("b", {}, nome), h("span", { class: "status" }, h("span", { class: "ponto" }), nova ? "versão nova: " + nova : erro ? "não verificado" : "atualizado")),
+        h("small", {}, (atual ? "instalada: " + atual : "versão desconhecida") + (erro ? " · " + erro : "")), extra || null),
+      h("div", { class: "acoes" }, nova ? botao : null));
+    return h("div", { class: "secoes" },
+      h("p", { class: "intro" }, "Nada é instalado sem o seu clique. A extensão vem do release do GitHub (" + A.repo + "); o OpenCode atualiza com opencode upgrade no terminal."),
+      h("div", { class: "lista" },
+        cartao("egg", "Digitama OpenCode (esta extensão)", s.extensao.atual, s.extensao.nova, s.extensao.erro,
+          h("button", { class: "pri", onclick: () => enviar({ tipo: "atualizarExtensao" }) }, I("refresh", 13), "Atualizar extensão"),
+          s.extensao.pagina ? h("button", { class: "link", onclick: () => enviar({ tipo: "abrirUrl", url: s.extensao.pagina }) }, "ver o que mudou") : null),
+        cartao("box", "OpenCode", s.opencode.atual, s.opencode.nova, s.opencode.erro,
+          h("button", { class: "pri", onclick: () => enviar({ tipo: "atualizarOpencode" }) }, I("terminal", 13), "opencode upgrade"))),
+      secao("Verificar sozinho", "A cada 6 h, numa janela só, e avisa com um botão.",
+        seg([[true, "Ligado"], [false, "Desligado"]], A.automatico, (v) => enviar({ tipo: "autoAtualizar", valor: v }))),
+      h("div", { class: "acoes-linha" }, h("button", { class: "neg pequeno", onclick: () => enviar({ tipo: "atualizacoes", forcar: true }) }, I("refresh", 13), "Verificar agora"), h("small", { class: "muted" }, "Última verificação: " + quando)));
+  }
+
   // ── MCPs ──
   function abaMcps() {
     const lista = S.mcps;
@@ -145,7 +174,7 @@
   }
 
   function desenhar() {
-    const corpo = S.aba === "tema" ? abaTema() : S.aba === "conexoes" ? abaConexoes() : abaMcps();
+    const corpo = S.aba === "tema" ? abaTema() : S.aba === "conexoes" ? abaConexoes() : S.aba === "atualizacoes" ? abaAtualizacoes() : abaMcps();
     // anima só ao trocar de aba: redesenhos por estado de conexão não piscam
     if (S.aba !== ultimaAba) corpo.classList.add("entra");
     ultimaAba = S.aba;
@@ -176,6 +205,7 @@
       S.provedores = m.provedores;
       if (m.adicionado) S.novoMcp = null;
     } else if (m.tipo === "aba") S.aba = m.aba;
+    else if (m.tipo === "atualizacoes") S.atual = m;
     else if (m.tipo === "erro") S.erro = m.texto;
     // estado de conexão chegando enquanto você digita num formulário: guarda e redesenha depois
     if (m.tipo === "estado" && document.activeElement?.closest?.(".form")) return void document.activeElement.addEventListener("blur", desenhar, { once: true });

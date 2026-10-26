@@ -34,6 +34,7 @@ export const COMANDOS: Comando[] = [
   { nome: "status", apelidos: [], descricao: "Versão, serviço, modelo e contexto", icone: "question" },
   { nome: "pair", apelidos: ["parear"], descricao: "Pareia celular ou navegador", icone: "phone" },
   { nome: "config", apelidos: ["settings", "configuracoes", "conexoes"], descricao: "Tema, conexões (GitHub, Cloudflare…) e MCPs", icone: "gear" },
+  { nome: "atualizar", apelidos: ["upgrade", "update", "atualizacoes"], descricao: "Versões do OpenCode e da extensão, e atualizar", icone: "refresh" },
   { nome: "ajuda", apelidos: ["help", "?"], descricao: "Lista todos os comandos", icone: "question" },
 ];
 

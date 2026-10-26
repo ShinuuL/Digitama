@@ -346,3 +346,16 @@ body.sem-animacao *, body.sem-animacao *::before, body.sem-animacao *::after { a
 .grupo-prov.aberto > .icone { transform: none; }
 .grupo-prov .conta { font-size: 10.5px; min-width: 18px; padding: 0 6px; border-radius: 999px; background: var(--cartao2); }
 .menu .nada { margin: 10px 8px; color: var(--suave); font-size: 12px; }
+
+/* anexos da próxima mensagem (clipe e texto colado grande) */
+.anexos, .anexos-msg { display: flex; flex-wrap: wrap; gap: 5px; }
+.anexos-msg { margin-bottom: 6px; }
+.anexo { display: inline-flex; align-items: center; gap: 5px; max-width: 220px; padding: 2px 4px 2px 8px; border-radius: 8px; font-size: 11.5px; background: var(--cartao2); box-shadow: inset 0 0 0 1px var(--borda); }
+.anexo .icone { color: var(--acento); flex: none; }
+.anexo .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.anexo small { color: var(--suave); font-size: 10px; flex: none; }
+.anexo.caminho { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ouro) 45%, transparent); }
+.anexo.caminho .icone { color: var(--ouro); }
+.anexo .tira { padding: 2px; background: transparent; color: var(--suave); border-radius: 5px; }
+.anexo .tira:hover { color: var(--verm); background: color-mix(in srgb, var(--verm) 14%, transparent); }
+.anexos-msg .anexo { padding-right: 8px; }

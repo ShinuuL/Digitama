@@ -89,7 +89,7 @@ export class PainelConfig {
     return (j.data ?? []).filter((i) => (i.connections ?? []).length).map((i) => ({ id: i.id, name: i.name, conexoes: i.connections.length }));
   }
 
-  private async mensagem(m: any) {
+  private async mensagem(m: any): Promise<unknown> {
     switch (m.tipo) {
       case "pronto":
         this.post({ tipo: "dados", tema: this.tema(), conexoes: this.todas(), relay: !!this.relayDigitama(), aba: this.aba });
@@ -151,6 +151,23 @@ export class PainelConfig {
         await this.svc.req("POST", "/api/location/reload" + naPasta(this.pasta()), {}).catch(() => {});
         return this.post({ tipo: "mcps", lista: await this.mcps(), provedores: await this.provedores(), adicionado: nome });
       }
+      case "atualizacoes": {
+        this.post({ tipo: "atualizacoes", carregando: true });
+        const s = await vscode.commands.executeCommand(m.forcar ? "digitamaOpencode.verificarAtualizacoes" : "digitamaOpencode.situacaoAtualizacoes");
+        const c = vscode.workspace.getConfiguration("digitamaOpencode.atualizacoes");
+        return this.post({ tipo: "atualizacoes", situacao: s, automatico: c.get("automatico", true), repo: c.get("repositorio", "ShinuuL/Digitama") });
+      }
+      case "atualizarExtensao":
+        return vscode.commands.executeCommand("digitamaOpencode.atualizarExtensao");
+      case "atualizarOpencode":
+        return vscode.commands.executeCommand("digitamaOpencode.atualizarOpencode");
+      case "autoAtualizar":
+        await vscode.workspace.getConfiguration("digitamaOpencode.atualizacoes").update("automatico", !!m.valor, vscode.ConfigurationTarget.Global);
+        return this.mensagem({ tipo: "atualizacoes" });
+      case "abrirUrl":
+        // só páginas do GitHub (as notas do release)
+        if (/^https:\/\/github\.com\//.test(String(m.url))) await vscode.env.openExternal(vscode.Uri.parse(m.url));
+        return;
       case "provedorLogin":
         return this.terminal("provedores", "opencode auth login");
       case "atualizarMcps":

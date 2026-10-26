@@ -9,6 +9,8 @@ import { PainelAgentes } from "./painelAgentes";
 import { PainelConfig, Tema, TEMA_PADRAO } from "./painelConfig";
 import { COMANDOS, Comando, lerComando, lerShell } from "./comandos";
 import * as uso from "./uso";
+import { Anexo, classificar, comCaminhos } from "./anexos";
+import { Atualizador } from "./atualizador";
 
 interface Sessao {
   id: string;
@@ -23,6 +25,8 @@ export function activate(ctx: vscode.ExtensionContext) {
   const cfg = () => vscode.workspace.getConfiguration("digitamaOpencode");
   const svc = new Servico(() => acharOpencode(cfg().get<string>("executavel", "")));
   const prov = new Painel(ctx, svc);
+  const atualizador = new Atualizador(ctx, svc);
+  const falhou = (e: unknown) => vscode.window.showErrorMessage(e instanceof Error ? e.message : String(e));
 
   const status = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 49);
   status.command = "digitamaOpencode.abrir";
@@ -45,6 +49,11 @@ export function activate(ctx: vscode.ExtensionContext) {
     vscode.commands.registerCommand("digitamaOpencode.recarregar", () => prov.comando("/recarregar")),
     vscode.commands.registerCommand("digitamaOpencode.config", (aba?: string) => PainelConfig.abrir(ctx, svc, () => prov.temaMudou(), typeof aba === "string" ? aba : undefined)),
     vscode.commands.registerCommand("digitamaOpencode.agentes", () => PainelAgentes.abrir(ctx, svc, () => void prov.recarregarAgentes())),
+    vscode.commands.registerCommand("digitamaOpencode.verificarAtualizacoes", () => atualizador.verificar(true).catch(falhou)),
+    vscode.commands.registerCommand("digitamaOpencode.situacaoAtualizacoes", () => atualizador.situacao ?? atualizador.verificar(true)),
+    vscode.commands.registerCommand("digitamaOpencode.atualizarExtensao", () => atualizador.atualizarExtensao().catch(falhou)),
+    vscode.commands.registerCommand("digitamaOpencode.atualizarOpencode", () => atualizador.atualizarOpencode()),
+    atualizador.iniciar(),
     vscode.workspace.onDidChangeWorkspaceFolders(() => prov.iniciar(true)),
     { dispose: () => prov.parar() },
   );
@@ -453,7 +462,13 @@ class Painel implements vscode.WebviewViewProvider {
       case "config":
         return vscode.commands.executeCommand("digitamaOpencode.config", m.aba);
       case "enviar":
-        return this.enviar(String(m.texto ?? ""));
+        return this.enviar(String(m.texto ?? ""), Array.isArray(m.anexos) ? m.anexos : []);
+      case "anexar": {
+        const uris = await vscode.window.showOpenDialog({ canSelectMany: true, canSelectFiles: true, canSelectFolders: true, openLabel: "Anexar", defaultUri: vscode.workspace.workspaceFolders?.[0]?.uri });
+        if (!uris?.length) return;
+        const entrada = this.modelos.find((x) => x.id === (this.atual?.model ?? this.modelo)?.id && x.providerID === (this.atual?.model ?? this.modelo)?.providerID)?.entrada ?? [];
+        return this.post({ tipo: "anexos", itens: uris.map((u) => classificar(u.fsPath, entrada)) });
+      }
       case "interromper":
         if (this.atual) await this.svc.req("POST", `/api/session/${this.atual.id}/interrupt`, {});
         return;
@@ -475,11 +490,24 @@ class Painel implements vscode.WebviewViewProvider {
     }
   }
 
-  private async enviar(texto: string): Promise<unknown> {
+  private async enviar(texto: string, anexos: Anexo[] = []): Promise<unknown> {
     texto = texto.trim();
-    if (!texto) return;
-    const local = lerComando(texto);
+    if (!texto && !anexos.length) return;
+    const local = anexos.length ? undefined : lerComando(texto);
     if (local) return this.executar(local.cmd, local.args);
+    if (anexos.length) {
+      // arquivos legíveis vão em `files` (file:// ou data: do texto colado); o resto vai pelo caminho no texto
+      const s = this.atual ?? (await this.criar());
+      const files = anexos
+        .filter((a) => a.modo === "arquivo" && typeof a.uri === "string" && /^(file:|data:text\/plain;)/.test(a.uri))
+        .map((a) => ({ uri: a.uri!, name: String(a.nome ?? "anexo").slice(0, 120) }));
+      const final = comCaminhos(texto || "Veja os anexos.", anexos);
+      this.rodando = true;
+      this.estado();
+      const r = await this.svc.req<{ data: any }>("POST", `/api/session/${s.id}/prompt`, { text: final, files });
+      this.post({ tipo: "eco", mensagem: { id: r.data?.id, type: "user", text: final, anexos: anexos.map((a) => ({ nome: a.nome, modo: a.modo })) } });
+      return;
+    }
     const s = this.atual ?? (await this.criar());
     const shell = lerShell(texto);
     this.rodando = true;
@@ -596,6 +624,8 @@ class Painel implements vscode.WebviewViewProvider {
         return this.parear();
       case "config":
         return vscode.commands.executeCommand("digitamaOpencode.config");
+      case "atualizar":
+        return vscode.commands.executeCommand("digitamaOpencode.config", "atualizacoes");
       case "ajuda":
         return this.post({ tipo: "ajuda" });
     }

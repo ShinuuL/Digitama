@@ -6,6 +6,7 @@ Interface do OpenCode v2 no painel lateral do VS Code.
 - **Agente e modelo** por conversa. O menu de modelos tem busca, filtro "só grátis" e seções por provedor que abrem e fecham (a do modelo atual vem aberta e primeiro).
 - **Bola de contexto:** enche conforme os tokens do último passo em relação a `limit.context` do modelo. Ciano até 60%, dourado até 85%, vermelho acima disso. Ela aparece também na barra de status.
 - **Uso dos modelos grátis (janela de 5 h):** os modelos grátis de um provedor dividem a mesma cota (trocar Big Pickle por DeepSeek não escapa do bloqueio); cada modelo mostra o uso da cota e o seu próprio. O uso vem do próprio serviço do OpenCode (`/api/experimental/session/stats`), então soma todas as janelas do VS Code, o TUI, o celular e os subagentes; o limite aprendido e o bloqueio ficam num arquivo compartilhado entre as janelas. O limite não é publicado, então é aprendido: na primeira recusa por cota (`FreeUsageLimitError`, "rate limit", 429) a extensão guarda o uso daquele momento como limite, marca a cota inteira como esgotada até a janela liberar e oferece trocar de modelo. Daí em diante aparece a barra "usado de ~limite". O uso aparece no topo do painel (pílula ao lado do contexto) e, por modelo, no menu de modelos.
+- **Anexos:** clipe na caixa de mensagem (vários de uma vez). Texto e arquivos que o modelo lê (imagem, PDF, áudio, vídeo, conforme o modelo) vão como arquivo; o resto (binários, pastas, mais de 8 MB) vai como caminho no texto, para o agente abrir. Texto colado com mais de 2 linhas vira um `.txt` anexado.
 - **Respostas em tempo real**, com as ferramentas usadas e o raciocínio (recolhível).
 - **Modos de permissão** (vão como regras da sessão, valem até com o painel fechado):
   - *Perguntar*: confirma edições, comandos e web; leituras seguem livres.
@@ -18,6 +19,7 @@ Interface do OpenCode v2 no painel lateral do VS Code.
   - *Tema*: cor de destaque, densidade e animações, com prévia.
   - *Conexões*: GitHub, Cloudflare Tunnel, Docker, npm e Git, com estado ao vivo. "Conectar" abre o login oficial no terminal do VS Code (`gh auth login --web`, `cloudflared tunnel login`…); dá para adicionar suas próprias ferramentas com um comando de status. A extensão nunca vê senha nem token, e a saída é mascarada.
   - *MCPs*: liga/desliga, remove e adiciona servidores (local ou remoto), gravados com `opencode mcp add --global` em `~/.config/opencode/opencode.json` (remover faz backup datado antes), e registra o MCP do pet Digitama com um clique.
+- **Atualizações** (Configurações → Atualizações, ou `/atualizar`): compara a extensão com o `.vsix` do release mais novo no GitHub (`digitamaOpencode.atualizacoes.repositorio`, padrão `ShinuuL/Digitama`) e o OpenCode com o npm (`@opencode/cli`). Verifica sozinho a cada 6 h, numa janela só; instala só com o seu clique. O OpenCode atualiza com `opencode upgrade` no terminal.
 - **Comandos `/`** como os do TUI, em português com apelidos em inglês: `/recarregar` (`/reload`), `/nova`, `/sessoes`, `/parar`, `/compactar`, `/desfazer`, `/refazer`, `/bifurcar`, `/renomear`, `/arquivar`, `/exportar`, `/modelos`, `/agentes`, `/montar`, `/modo`, `/skill`, `/mcp`, `/status`, `/pair` e `/ajuda`, mais os do OpenCode (`/init`, `/review`). `!comando` roda no terminal da conversa.
 
 ## Como funciona
@@ -36,5 +38,5 @@ O serviço escuta apenas em `127.0.0.1`. O link funciona direto neste PC. Para o
 npm install
 npm test          # compila e roda os testes
 npm run package   # gera o .vsix
-code --install-extension digitama-opencode-0.4.5.vsix
+code --install-extension digitama-opencode-0.5.0.vsix
 ```

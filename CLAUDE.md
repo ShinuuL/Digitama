@@ -4,7 +4,7 @@ Pet de área de trabalho (Tauri 2, qualquer PC Windows 10/11) que reage ao Claud
 
 A extensão do VS Code (Digimon Pendulum Ver.1.0) mudou para o projeto `C:\DEV\Dev\Pendulum\vscode-ext`, fora deste repositório. Para animação de sprites, veja a skill `sprite-motion` (`.claude/skills/`).
 
-A extensão `opencode-ext/` (Digitama OpenCode) é a interface do OpenCode v2: fala com o `opencode service` pareando (`opencode api server.pair` → `/auth/connect` → token só em memória), nunca lê o `service.json`. `npm test` lá dentro.
+A extensão `opencode-ext/` (Digitama OpenCode) é a interface do OpenCode v2: fala com o `opencode service` pareando (`opencode api server.pair` → `/auth/connect` → token só em memória), nunca lê o `service.json`. `npm test` lá dentro. Ela se atualiza pelos releases do GitHub: **todo release do Digitama deve anexar o `opencode-ext/digitama-opencode-<versão>.vsix`** (o nome tem de seguir esse padrão), senão as extensões instaladas não veem a versão nova.
 
 ## Build e testes
 ```

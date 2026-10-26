@@ -771,7 +771,7 @@ dependencies = [
 
 [[package]]
 name = "digitama"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "base64 0.22.1",
  "png 0.17.16",
@@ -789,7 +789,7 @@ dependencies = [
 
 [[package]]
 name = "digitama-hook"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "serde_json",
  "windows 0.61.3",

@@ -104,9 +104,35 @@
   ];
   const modosEl = h("div", { class: "modos", role: "radiogroup", "aria-label": "Permissões" });
 
+  // anexos da próxima mensagem: arquivos escolhidos no clipe e textos colados grandes (viram .txt)
+  let anexos = [];
+  let colados = 0;
+  const anexosEl = h("div", { class: "anexos", hidden: true });
+  function desenharAnexos() {
+    anexosEl.hidden = !anexos.length;
+    anexosEl.replaceChildren(...anexos.map((a, i) => h("span", { class: "anexo" + (a.modo === "caminho" ? " caminho" : ""), title: a.modo === "caminho" ? "Vai pelo caminho no texto (" + (a.motivo || "") + "): " + (a.caminho || "") : a.caminho || a.nome },
+      I(a.modo === "caminho" ? "folder" : "file", 12), h("span", { class: "nm" }, a.nome),
+      a.modo === "caminho" ? h("small", {}, "caminho") : a.tamanho ? h("small", {}, a.tamanho > 1024 ? Math.round(a.tamanho / 1024) + " KB" : a.tamanho + " B") : null,
+      h("button", { class: "tira", title: "Remover", "aria-label": "Remover " + a.nome, onclick: () => ((anexos = anexos.filter((_, j) => j !== i)), desenharAnexos()) }, I("x", 11)))));
+  }
+  const paraBase64 = (t) => btoa(String.fromCharCode(...new TextEncoder().encode(t)));
+  texto.addEventListener("paste", (e) => {
+    const t = e.clipboardData?.getData("text/plain") || "";
+    // mesmo critério do chat do Digitama: mais de 2 linhas (ou muito longo) vira um .txt anexado
+    if (t.split(/\r?\n/).length <= 2 && t.length <= 1500) return;
+    e.preventDefault();
+    colados += 1;
+    let b64;
+    try { b64 = paraBase64(t); } catch { b64 = btoa(unescape(encodeURIComponent(t))); }
+    anexos.push({ nome: "colado-" + colados + ".txt", modo: "arquivo", uri: "data:text/plain;charset=utf-8;base64," + b64, tamanho: new TextEncoder().encode(t).length });
+    desenharAnexos();
+  });
+
   const caixa = h("div", { class: "caixa" },
+    anexosEl,
     texto,
     h("div", { class: "linha" },
+      h("button", { class: "ic barra", title: "Anexar arquivos", "aria-label": "Anexar arquivos", onclick: () => enviar({ tipo: "anexar" }) }, I("paperclip", 15)),
       h("button", { class: "ic barra", title: "Comandos ( / )", "aria-label": "Comandos", onclick: () => { texto.value = "/"; texto.focus(); texto.dispatchEvent(new Event("input")); } }, I("slash", 15)),
       chipAgente,
       chipModelo,
@@ -121,11 +147,13 @@
   }
   function mandar() {
     const t = texto.value.trim();
-    if (!t) return;
+    if (!t && !anexos.length) return;
     texto.value = "";
     autoAltura();
     sugest.hidden = true;
-    enviar({ tipo: "enviar", texto: t });
+    enviar({ tipo: "enviar", texto: t, anexos });
+    anexos = [];
+    desenharAnexos();
   }
   texto.addEventListener("keydown", (e) => {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -446,8 +474,10 @@
   const NOMES_TOOL = { read: "Ler", edit: "Editar", write: "Escrever", patch: "Aplicar patch", shell: "Terminal", bash: "Terminal", glob: "Procurar arquivos", grep: "Buscar texto", webfetch: "Abrir página", websearch: "Pesquisar na web", question: "Pergunta", subagent: "Subagente", task: "Subagente", todowrite: "Tarefas", skill: "Skill" };
   const ICONE_TOOL = { read: "file", edit: "pencil", write: "pencil", patch: "pencil", shell: "terminal", bash: "terminal", glob: "search", grep: "search", webfetch: "globe", websearch: "globe", question: "question", subagent: "users", task: "users" };
 
-  function blocoUsuario(t) {
-    return h("article", { class: "msg user" }, md(t));
+  function blocoUsuario(t, lista) {
+    const el = h("article", { class: "msg user" }, md(t));
+    if (lista?.length) el.prepend(h("div", { class: "anexos-msg" }, ...lista.map((a) => h("span", { class: "anexo" + (a.modo === "caminho" ? " caminho" : "") }, I(a.modo === "caminho" ? "folder" : "file", 11), a.nome))));
+    return el;
   }
   function resumo(input) {
     if (typeof input !== "object" || !input) return String(input ?? "");
@@ -760,7 +790,7 @@
     } else if (m.tipo === "historico") desenharHistorico(m.mensagens);
     else if (m.tipo === "eco") {
       lista.querySelector(".vazio")?.remove();
-      lista.append(blocoUsuario(m.mensagem.text));
+      lista.append(blocoUsuario(m.mensagem.text, m.mensagem.anexos));
       rolar();
     } else if (m.tipo === "evento") evento(m.e);
     else if (m.tipo === "pendencias") desenharPendencias(m.permissoes, m.forms);
@@ -769,6 +799,11 @@
     else if (m.tipo === "aviso") mostrarAviso(m.texto, m.nivel, m.acao);
     else if (m.tipo === "menu") abrirMenu(m.qual);
     else if (m.tipo === "ajuda") ajuda();
+    else if (m.tipo === "anexos") {
+      anexos.push(...m.itens);
+      desenharAnexos();
+      texto.focus();
+    }
   });
 
   desenharEstado();

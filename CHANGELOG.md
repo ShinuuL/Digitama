@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.4.1 — 26/10/2026
+
+- **Extensão Digitama OpenCode 0.5.0** (`digitama-opencode-0.5.0.vsix` no release):
+  - **Anexos:** clipe na caixa de mensagem, com vários arquivos e pastas de uma vez. Texto, e imagem/PDF/áudio/vídeo quando o modelo lê esse tipo, vão como arquivo; binários, pastas e arquivos acima de 8 MB vão pelo caminho no texto, em vez de dar erro. Texto colado com mais de 2 linhas vira um `.txt` anexado.
+  - **Atualizações:** a extensão verifica os releases deste repositório e se atualiza com um clique (baixa e instala o `.vsix`). Também compara o OpenCode com o npm (`@opencode/cli`) e roda `opencode upgrade` no terminal. A verificação automática roda a cada 6 h, numa janela só. Está em Configurações → Atualizações e em `/atualizar`.
+  - Correções: as cores do tema e das etapas voltaram (a CSP bloqueava `style` inline), as Configurações pararam de piscar e as seções por provedor do menu de modelos recolhem.
+
 ## v0.4.0 — 26/10/2026
 
 - **OpenCode v2:** o plugin do pet foi refeito para a v2 (`{ id, setup(ctx) }`, eventos `session.execution.*`, `session.tool.*`, `permission.asked`); a permissão clicada no balão volta por `ctx.permission.reply`. Instale de novo em Digivice → OpenCode.
