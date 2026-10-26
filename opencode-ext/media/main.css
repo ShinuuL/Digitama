@@ -359,3 +359,7 @@ body.sem-animacao *, body.sem-animacao *::before, body.sem-animacao *::after { a
 .anexo .tira { padding: 2px; background: transparent; color: var(--suave); border-radius: 5px; }
 .anexo .tira:hover { color: var(--verm); background: color-mix(in srgb, var(--verm) 14%, transparent); }
 .anexos-msg .anexo { padding-right: 8px; }
+
+/* copiar a resposta inteira: aparece ao passar o mouse */
+.quem .copiar-msg { opacity: 0; padding: 3px; }
+.msg.bot:hover .quem .copiar-msg, .quem .copiar-msg:focus-visible { opacity: 1; }

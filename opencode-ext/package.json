@@ -2,7 +2,7 @@
   "name": "digitama-opencode",
   "displayName": "Digitama OpenCode",
   "description": "Interface do OpenCode v2 no painel do VS Code: conversas, agentes, permissões, bola de contexto e pareamento (/pair).",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "publisher": "mastersys",
   "private": true,
   "license": "UNLICENSED",

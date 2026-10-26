@@ -116,7 +116,36 @@
       h("button", { class: "tira", title: "Remover", "aria-label": "Remover " + a.nome, onclick: () => ((anexos = anexos.filter((_, j) => j !== i)), desenharAnexos()) }, I("x", 11)))));
   }
   const paraBase64 = (t) => btoa(String.fromCharCode(...new TextEncoder().encode(t)));
+  // base64 em pedaços: String.fromCharCode(...bytes) estoura a pilha em arquivo grande
+  function bytesBase64(bytes) {
+    let s = "";
+    for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+    return btoa(s);
+  }
+  const LIMITE_COLAR = 8 * 1024 * 1024;
+  let prints = 0;
+  /** Ctrl+V de arquivos copiados no Explorer ou de um print: o host grava e decide (arquivo ou caminho). */
+  async function colarArquivos(files) {
+    const itens = [];
+    const grandes = [];
+    for (const f of files) {
+      if (f.size > LIMITE_COLAR) {
+        grandes.push(f.name || "arquivo");
+        continue;
+      }
+      const nome = f.name && f.name !== "image.png" ? f.name : "print-" + ++prints + "." + ((f.type.split("/")[1] || "png").replace("jpeg", "jpg"));
+      itens.push({ nome, b64: bytesBase64(new Uint8Array(await f.arrayBuffer())) });
+    }
+    if (itens.length) enviar({ tipo: "colarArquivos", itens });
+    if (grandes.length) mostrarAviso("Grande demais para colar (mais de 8 MB): " + grandes.join(", ") + ". Use o clipe, que anexa pelo caminho.", "info");
+  }
   texto.addEventListener("paste", (e) => {
+    const arquivos = [...(e.clipboardData?.files || [])];
+    if (arquivos.length) {
+      e.preventDefault();
+      void colarArquivos(arquivos);
+      return;
+    }
     const t = e.clipboardData?.getData("text/plain") || "";
     // mesmo critério do chat do Digitama: mais de 2 linhas (ou muito longo) vira um .txt anexado
     if (t.split(/\r?\n/).length <= 2 && t.length <= 1500) return;
@@ -504,7 +533,12 @@
     return h("details", { class: "pensa", open: aberto }, h("summary", {}, I("brain", 12), "Raciocínio"), h("div", { class: "corpo" }, txt || ""));
   }
   function cabecalhoBot(agente, modelo) {
-    return h("div", { class: "quem" }, h("span", { class: "avatar" }, I("egg", 12)), agente || "opencode", modelo ? h("span", { class: "mod" }, modelo) : null);
+    const copiar = h("button", { class: "ic copiar-msg", title: "Copiar resposta", "aria-label": "Copiar resposta", onclick: (e) => {
+      const msg = e.currentTarget.closest(".msg");
+      const partes = [...msg.querySelectorAll(":scope > .texto")].map((p) => p._txt ?? p.innerText).filter(Boolean);
+      enviar({ tipo: "copiar", texto: partes.join("\n\n") || msg.innerText });
+    } }, I("copy", 13));
+    return h("div", { class: "quem" }, h("span", { class: "avatar" }, I("egg", 12)), agente || "opencode", modelo ? h("span", { class: "mod" }, modelo) : null, h("span", { class: "flex" }), copiar);
   }
   function nomeModelo(ref) {
     if (!ref) return "";
@@ -513,7 +547,11 @@
   function blocoAssistente(m) {
     const el = h("article", { class: "msg bot" }, cabecalhoBot(m.agent, nomeModelo(m.model)));
     for (const c of m.content || []) {
-      if (c.type === "text" && c.text) el.append(h("div", { class: "texto" }, md(c.text)));
+      if (c.type === "text" && c.text) {
+        const t = h("div", { class: "texto" }, md(c.text));
+        t._txt = c.text; // o markdown original, para o botão de copiar
+        el.append(t);
+      }
       else if (c.type === "reasoning" && c.text) el.append(pensaEl(c.text, false));
       else if (c.type === "tool") el.append(toolEl(c));
     }

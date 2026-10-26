@@ -25,6 +25,14 @@ export function activate(ctx: vscode.ExtensionContext) {
   const cfg = () => vscode.workspace.getConfiguration("digitamaOpencode");
   const svc = new Servico(() => acharOpencode(cfg().get<string>("executavel", "")));
   const prov = new Painel(ctx, svc);
+  // colados (Ctrl+V de arquivos/prints) ficam numa pasta da extensão: apaga os de mais de 1 dia
+  try {
+    const dir = path.join(ctx.globalStorageUri.fsPath, "anexos");
+    for (const n of fs.existsSync(dir) ? fs.readdirSync(dir) : []) {
+      const p = path.join(dir, n);
+      if (Date.now() - fs.statSync(p).mtimeMs > 24 * 60 * 60 * 1000) fs.rmSync(p, { force: true });
+    }
+  } catch {}
   const atualizador = new Atualizador(ctx, svc);
   const falhou = (e: unknown) => vscode.window.showErrorMessage(e instanceof Error ? e.message : String(e));
 
@@ -463,6 +471,19 @@ class Painel implements vscode.WebviewViewProvider {
         return vscode.commands.executeCommand("digitamaOpencode.config", m.aba);
       case "enviar":
         return this.enviar(String(m.texto ?? ""), Array.isArray(m.anexos) ? m.anexos : []);
+      case "colarArquivos": {
+        // a webview não sabe o caminho do que foi colado: grava numa pasta da extensão e classifica como no clipe
+        const dir = path.join(this.ctx.globalStorageUri.fsPath, "anexos");
+        fs.mkdirSync(dir, { recursive: true });
+        const entrada = this.modelos.find((x) => x.id === (this.atual?.model ?? this.modelo)?.id && x.providerID === (this.atual?.model ?? this.modelo)?.providerID)?.entrada ?? [];
+        const itens = (Array.isArray(m.itens) ? m.itens : []).slice(0, 20).map((it: any) => {
+          const nome = String(it.nome ?? "colado").replace(/[\\/:*?"<>|\x00-\x1f]/g, "_").slice(0, 100) || "colado";
+          const p = path.join(dir, `${Date.now()}-${nome}`);
+          fs.writeFileSync(p, Buffer.from(String(it.b64 ?? ""), "base64"));
+          return { ...classificar(p, entrada), nome };
+        });
+        return this.post({ tipo: "anexos", itens });
+      }
       case "anexar": {
         // no Windows/Linux, arquivos + pastas no mesmo seletor vira um seletor só de pastas: aqui são só arquivos
         const uris = await vscode.window.showOpenDialog({ canSelectMany: true, canSelectFiles: true, canSelectFolders: false, openLabel: "Anexar", title: "Anexar arquivos", defaultUri: vscode.workspace.workspaceFolders?.[0]?.uri });
