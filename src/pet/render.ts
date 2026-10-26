@@ -4,6 +4,8 @@
 //     com fundo removido, bordas recortadas e silhuetas para os efeitos.
 //  2. O desenho em código de sprites.ts, quando não há pacote (e para os ovos).
 import { sprite } from "./sprites";
+import { walkFrames } from "./walk";
+import type { ArtAnim } from "./art.gen";
 
 export type Pose = "idle" | "attack" | "hit" | "walk";
 
@@ -20,23 +22,29 @@ interface Frame {
   /** Idle do jogo (folhas do DS): os quadros e o deslocamento de cada um em
    *  relação ao primeiro, para não tremer entre quadros. */
   cycle?: { canvas: HTMLCanvasElement; ox: number; oy: number }[];
+  /** Ordem de vaivém dos quadros do idle (0,1,2,1,…), calculada uma vez. */
+  seq?: number[];
 }
 
-/** Para onde o sprite olha no arquivo (1 = direita) e redução de arte ampliada. */
-const PACK_INFO: Record<string, { face: 1 | -1; down?: number }> = {
-  botamon: { face: -1 }, koromon: { face: -1 }, agumon: { face: -1 }, greymon: { face: 1 },
-  metalgreymon: { face: 1 }, wargreymon: { face: -1 },
-  jyarimon: { face: -1 }, gigimon: { face: -1 }, guilmon: { face: 1 }, growlmon: { face: 1 },
-  wargrowlmon: { face: 1 }, gallantmon: { face: -1 },
-  dodomon: { face: 1, down: 4 }, dorimon: { face: -1 }, dorumon: { face: 1 }, dorugamon: { face: -1 },
-  doruguremon: { face: 1 }, alphamon: { face: -1 },
+/**
+ * Para onde o sprite olha no arquivo (1 = direita), redução de arte ampliada e,
+ * nos grandes, o centro do rosto (px do quadro 0 do idle) para o retrato: o
+ * ponto mais alto deles costuma ser asa, capa ou lança, não a cabeça.
+ */
+const PACK_INFO: Record<string, { face: 1 | -1; down?: number; head?: [number, number] }> = {
+  botamon: { face: -1 }, koromon: { face: -1 }, agumon: { face: -1 }, greymon: { face: 1, head: [50, 35] },
+  metalgreymon: { face: 1, head: [68, 42] }, wargreymon: { face: -1 },
+  jyarimon: { face: -1 }, gigimon: { face: -1 }, guilmon: { face: 1 }, growlmon: { face: 1, head: [40, 26] },
+  wargrowlmon: { face: 1, head: [43, 40] }, gallantmon: { face: -1, head: [62, 40] },
+  dodomon: { face: 1, down: 4 }, dorimon: { face: -1 }, dorumon: { face: 1 }, dorugamon: { face: -1, head: [26, 60] },
+  doruguremon: { face: 1, head: [42, 50] }, alphamon: { face: -1, head: [40, 32] },
 };
 
 /** Altura alvo (px) por estágio, no tamanho "Normal". */
 const TARGET_H = [44, 44, 56, 84, 112, 128, 140];
 const SIZE_FACTOR: Record<number, number> = { 3: 0.75, 4: 1, 5: 1.35, 6: 1.7 };
 
-const packs = new Map<string, Partial<Record<Pose, Frame>>>();
+let loaded = new Map<string, Partial<Record<Pose, Frame>>>();
 const codeCache = new Map<string, HTMLCanvasElement>();
 
 function canvas(w: number, h: number) {
@@ -86,7 +94,10 @@ async function processFrame(url: string, down = 1): Promise<Frame> {
         if (y < y0) y0 = y;
         if (y > y1) y1 = y;
       }
-  if (x1 < 0) throw new Error("sprite vazio");
+  if (x1 < 0) {
+    release(c);
+    throw new Error("sprite vazio");
+  }
   g.putImageData(data, 0, 0);
   const w = Math.ceil((x1 - x0 + 1) / down), h = Math.ceil((y1 - y0 + 1) / down);
   const out = canvas(w, h);
@@ -106,37 +117,35 @@ async function processFrame(url: string, down = 1): Promise<Frame> {
   } else {
     og.drawImage(c, x0, y0, w, h, 0, 0, w, h);
   }
+  release(c);
   return { normal: out, white: tinted(out, "#ffffff"), red: tinted(out, "#ff3b3b"), w, h };
 }
 
+/** Solta a memória de um canvas na hora, sem esperar o coletor de lixo. */
+function release(...list: (HTMLCanvasElement | undefined)[]) {
+  for (const c of list) if (c) c.width = c.height = 0;
+}
+
+function releaseFrame(f: Frame | undefined) {
+  if (!f) return;
+  release(f.normal, f.white, f.red, ...(f.walk ?? []), ...(f.breath ?? []), ...(f.cycle ?? []).map((c) => c.canvas));
+}
+
 /**
- * Os sprites de batalha do DS não têm quadros de caminhada; este ciclo de 4
- * passos é feito a partir da pose parada: a faixa das pernas é dividida ao meio
- * e cada metade sobe alternadamente, com o corpo descendo 1 px a cada passo.
+ * Os sprites de batalha do DS não têm quadros de caminhada: o ciclo de passos
+ * sai dos próprios pixels da pose parada (src/pet/walk.ts). Sem pés separáveis,
+ * ou se um quadro esconderia mais de 5% do desenho, não há ciclo e o Digimon
+ * anda só com o balanço do corpo.
  */
-function makeWalk(src: HTMLCanvasElement): HTMLCanvasElement[] {
+function makeWalk(src: HTMLCanvasElement, face: 1 | -1): HTMLCanvasElement[] | undefined {
   const w = src.width, h = src.height;
-  // só a faixa dos pés sobe; o resto do corpo fica por baixo (sem buraco nem corte)
-  const legTop = Math.round(h * 0.75);
-  const lift = Math.max(2, Math.round(h * 0.06));
-  const mid = Math.round(w / 2);
-  const frames: HTMLCanvasElement[] = [];
-  for (const phase of [0, 1, 2, 3]) {
+  const pixels = src.getContext("2d", { willReadFrequently: true })!.getImageData(0, 0, w, h);
+  const frames = walkFrames({ width: w, height: h, data: pixels.data }, face);
+  return frames?.map((f) => {
     const c = canvas(w, h);
-    const g = c.getContext("2d")!;
-    g.imageSmoothingEnabled = false;
-    const step = phase === 1 || phase === 3;
-    // o corpo desce 1 px no passo (o peso cai na perna de apoio)
-    g.drawImage(src, 0, step ? 1 : 0);
-    if (step) {
-      const x0 = phase === 1 ? 0 : mid, x1 = phase === 1 ? mid : w;
-      // o pé que dá o passo: apaga embaixo e redesenha mais alto
-      g.clearRect(x0, legTop, x1 - x0, h - legTop);
-      g.drawImage(src, x0, legTop, x1 - x0, h - legTop, x0, legTop - lift + 1, x1 - x0, h - legTop);
-    }
-    frames.push(c);
-  }
-  return frames;
+    c.getContext("2d")!.putImageData(new ImageData(f.data, w, h), 0, 0);
+    return c;
+  });
 }
 
 /**
@@ -195,9 +204,16 @@ function bestOffset(a: HTMLCanvasElement, b: HTMLCanvasElement): [number, number
   return best;
 }
 
-/** Carrega os pacotes vindos do backend (`id` ou `id/pose` → data URL). */
+let loading = 0;
+
+/**
+ * Carrega os pacotes vindos do backend (`id` ou `id/pose` → data URL). Monta
+ * tudo à parte e troca de uma vez (o pet nunca fica sem sprite no meio), e
+ * solta na hora os quadros antigos: são centenas de canvas por linha.
+ */
 export async function loadPacks(map: Record<string, string>) {
-  packs.clear();
+  const ticket = ++loading;
+  const packs = new Map<string, Partial<Record<Pose, Frame>>>();
   const cycles = new Map<string, { n: number; frame: Frame }[]>();
   await Promise.all(
     Object.entries(map).map(async ([key, url]) => {
@@ -218,7 +234,7 @@ export async function loadPacks(map: Record<string, string>) {
       if (!["idle", "attack", "hit"].includes(pose)) return;
       try {
         const frame = await processFrame(url, PACK_INFO[id]?.down ?? 1);
-        if (pose === "idle") frame.walk = makeWalk(frame.normal);
+        if (pose === "idle") frame.walk = makeWalk(frame.normal, PACK_INFO[id]?.face ?? -1);
         frame.breath = makeBreath(frame.normal);
         const entry = packs.get(id) ?? {};
         entry[pose as Pose] = frame;
@@ -234,20 +250,31 @@ export async function loadPacks(map: Record<string, string>) {
     if (list.length < 2) continue;
     const first = list[0].frame;
     const entry = packs.get(id) ?? {};
-    const idle = entry.idle ?? first;
     // a pose parada passa a ser o quadro 0 (mesma arte da folha)
-    entry.idle = { ...first, walk: makeWalk(first.normal) };
+    releaseFrame(entry.idle);
+    entry.idle = { ...first, walk: makeWalk(first.normal, PACK_INFO[id]?.face ?? -1) };
     entry.idle.cycle = list.map(({ frame }, i) => {
       const [ox, oy] = i === 0 ? [0, 0] : bestOffset(first.normal, frame.normal);
+      // dos outros quadros só o desenho normal é usado
+      if (i > 0) release(frame.white, frame.red);
       return { canvas: frame.normal, ox, oy };
     });
-    void idle;
+    const n = list.length;
+    entry.idle.seq = [...Array(n).keys(), ...Array.from({ length: n - 2 }, (_, i) => n - 2 - i)];
     packs.set(id, entry);
   }
+  const old = loaded;
+  if (ticket !== loading) {
+    // outra carga começou depois desta: a dela vale
+    for (const entry of packs.values()) Object.values(entry).forEach(releaseFrame);
+    return;
+  }
+  loaded = packs;
+  for (const entry of old.values()) Object.values(entry).forEach(releaseFrame);
 }
 
 export function hasPack(id: string) {
-  return !!packs.get(id)?.idle;
+  return !!loaded.get(id)?.idle;
 }
 
 function codeCanvas(id: string, variant: "normal" | "white" | "red") {
@@ -267,7 +294,7 @@ function codeCanvas(id: string, variant: "normal" | "white" | "red") {
 }
 
 function frameFor(id: string, pose: Pose): Frame {
-  const p = packs.get(id);
+  const p = loaded.get(id);
   const f = (pose === "walk" ? p?.idle : p?.[pose]) ?? p?.idle;
   if (f) return f;
   const n = codeCanvas(id, "normal");
@@ -314,6 +341,8 @@ export interface DrawOpts {
   white?: number;
   red?: number;
   alpha?: number;
+  /** Grade desenhada por cima, em pixels do sprite (rachaduras do ovo). */
+  overlay?: string[];
 }
 
 /** Desenha o Digimon e devolve a caixa ocupada (para o clique-através). */
@@ -326,9 +355,8 @@ export function drawMon(g: CanvasRenderingContext2D, id: string, o: DrawOpts): [
   // idle do jogo: vai e volta pelos quadros (0,1,2,1,…), cada um no seu encaixe
   let ox = 0, oy = 0;
   let body: HTMLCanvasElement = f.normal;
-  if ((o.pose ?? "idle") === "idle" && f.cycle && o.cycle != null) {
-    const n = f.cycle.length;
-    const seq = [...Array(n).keys(), ...Array.from({ length: n - 2 }, (_, i) => n - 2 - i)];
+  if ((o.pose ?? "idle") === "idle" && f.cycle && f.seq && o.cycle != null) {
+    const seq = f.seq;
     const c = f.cycle[seq[((o.cycle % seq.length) + seq.length) % seq.length]];
     body = c.canvas;
     ox = c.ox;
@@ -362,6 +390,7 @@ export function drawMon(g: CanvasRenderingContext2D, id: string, o: DrawOpts): [
   } else {
     g.drawImage(body, -Math.round(bw / 2), -bh, bw, bh);
   }
+  if (o.overlay) drawGrid(g, o.overlay, -Math.round(bw / 2), -bh, o.scale, "#1a1222");
   if (o.white) {
     g.globalAlpha = (o.alpha ?? 1) * Math.min(1, o.white);
     g.drawImage(f.white, -Math.round(w / 2), -h, w, h);
@@ -374,24 +403,129 @@ export function drawMon(g: CanvasRenderingContext2D, id: string, o: DrawOpts): [
   return [o.x - (w * sx) / 2, o.y - h * sy, w * sx, h * sy];
 }
 
-/** Desenha cabendo numa caixa (miniaturas do chat e das configurações). */
-export function drawMonFit(g: CanvasRenderingContext2D, id: string, cx: number, bottom: number, maxW: number, maxH: number) {
-  const f = frameFor(id, "idle");
-  const scale = Math.max(0.5, Math.min(maxW / f.w, maxH / f.h));
-  const s = scale >= 1 ? Math.floor(scale) : scale;
-  drawMon(g, id, { x: cx, y: bottom, scale: s });
+/** Onde está o rosto: o centro do desenho no alto do sprite (x, e a primeira linha com pixels). */
+const faces = new Map<string, { x: number; top: number }>();
+function faceOf(id: string, f: Frame) {
+  let face = faces.get(id);
+  if (face) return face;
+  const data = f.normal.getContext("2d")!.getImageData(0, 0, f.w, f.h).data;
+  let top = -1, sum = 0, n = 0;
+  for (let y = 0; y < f.h && (top < 0 || y < top + Math.max(8, f.h * 0.35)); y++)
+    for (let x = 0; x < f.w; x++)
+      if (data[(y * f.w + x) * 4 + 3] > 16) {
+        if (top < 0) top = y;
+        sum += x;
+        n++;
+      }
+  face = { x: n ? sum / n : f.w / 2, top: Math.max(0, top) };
+  faces.set(id, face);
+  return face;
 }
 
-/** Grade ASCII: "k" contorno, "x" preenchimento, "." vazio. */
-export function drawGrid(g: CanvasRenderingContext2D, grid: string[], x: number, y: number, px: number, fill: string, outline = "#1a1222") {
+/**
+ * Desenha cabendo numa caixa (miniaturas do chat e das configurações). Se o
+ * Digimon cabe em escala inteira, inteiro; se não (os Supremos têm até 152 px
+ * de alto), o rosto em tamanho real: encolher pixel art abaixo de 1× apaga os
+ * pixels, então o retrato é um recorte do alto do sprite, como nos jogos.
+ */
+export function drawMonFit(g: CanvasRenderingContext2D, id: string, cx: number, bottom: number, maxW: number, maxH: number) {
+  const f = frameFor(id, "idle");
+  const scale = Math.min(maxW / f.w, maxH / f.h);
+  if (scale >= 1) {
+    drawMon(g, id, { x: cx, y: bottom, scale: Math.floor(scale) });
+    return;
+  }
+  const w = Math.min(f.w, Math.floor(maxW)), h = Math.min(f.h, Math.floor(maxH));
+  const head = PACK_INFO[id]?.head;
+  // o rosto um pouco acima do meio do retrato; sem a marca, o alto do desenho
+  const [fx, fy] = head ?? [faceOf(id, f).x, faceOf(id, f).top + h * 0.45];
+  const sx = Math.round(Math.max(0, Math.min(f.w - w, fx - w / 2)));
+  const sy = Math.round(Math.max(0, Math.min(f.h - h, fy - h * 0.45)));
+  g.save();
+  g.imageSmoothingEnabled = false;
+  g.drawImage(f.normal, sx, sy, w, h, Math.round(cx - w / 2), Math.round(bottom - h), w, h);
+  g.restore();
+}
+
+/**
+ * Grade ASCII (as de art.gen.ts): "k" contorno, "w" branco, "x" preenchimento,
+ * "y" cor clara, "." vazio. `flip` espelha na horizontal (golpe para a esquerda).
+ */
+export function drawGrid(
+  g: CanvasRenderingContext2D,
+  grid: string[],
+  x: number,
+  y: number,
+  px: number,
+  fill: string,
+  outline = "#1a1222",
+  light = fill,
+  flip = false,
+) {
   grid.forEach((row, ry) => {
     for (let rx = 0; rx < row.length; rx++) {
       const ch = row[rx];
       if (ch === ".") continue;
-      g.fillStyle = ch === "k" ? outline : ch === "w" ? "#ffffff" : fill;
-      g.fillRect(Math.round(x + rx * px), Math.round(y + ry * px), px, px);
+      g.fillStyle = ch === "k" ? outline : ch === "w" ? "#ffffff" : ch === "y" ? light : fill;
+      const col = flip ? row.length - 1 - rx : rx;
+      g.fillRect(Math.round(x + col * px), Math.round(y + ry * px), px, px);
     }
   });
+}
+
+/** O quadro de uma animação de art.gen.ts em `ms`: em laço, ou parando no último. */
+export function artFrame(anim: ArtAnim, ms: number, loop = true): string[] {
+  const total = anim.ms.reduce((a, b) => a + b, 0);
+  let t = loop ? ((ms % total) + total) % total : Math.min(Math.max(0, ms), total - 1);
+  for (let i = 0; i < anim.frames.length; i++) {
+    if (t < anim.ms[i]) return anim.frames[i];
+    t -= anim.ms[i];
+  }
+  return anim.frames[anim.frames.length - 1];
+}
+
+const eggCache = new Map<string, { lid: HTMLCanvasElement; base: HTMLCanvasElement }>();
+
+/**
+ * O ovo (desenho em código) partido na rachadura: a tampa (com a linha da
+ * rachadura) e a base. Os pixels são os do próprio ovo.
+ */
+export function eggPieces(id: string, crack: string[]) {
+  const key = `${id}:${crack.join("")}`;
+  const hit = eggCache.get(key);
+  if (hit) return hit;
+  const egg = codeCanvas(id, "normal");
+  const w = egg.width, h = egg.height;
+  // em cada coluna, a altura da rachadura (as colunas sem ela copiam a vizinha)
+  const cut: (number | null)[] = Array.from({ length: w }, (_, x) => {
+    const ys = crack.map((row, y) => (row[x] === "k" ? y : -1)).filter((y) => y >= 0);
+    return ys.length ? Math.max(...ys) : null;
+  });
+  for (let pass = 0; pass < w; pass++)
+    for (let x = 0; x < w; x++) cut[x] ??= cut[x - 1] ?? cut[x + 1] ?? null;
+  const lid = canvas(w, h), base = canvas(w, h);
+  const lg = lid.getContext("2d")!, bg = base.getContext("2d")!;
+  for (let x = 0; x < w; x++) {
+    const c = cut[x] ?? Math.floor(h / 2);
+    lg.drawImage(egg, x, 0, 1, c + 1, x, 0, 1, c + 1);
+    bg.drawImage(egg, x, c + 1, 1, h - c - 1, x, c + 1, 1, h - c - 1);
+  }
+  drawGrid(lg, crack, 0, 0, 1, "#1a1222");
+  const pieces = { lid, base };
+  eggCache.set(key, pieces);
+  return pieces;
+}
+
+/** Desenha um canvas inteiro (pedaço de casca) girando em volta de `pivot` (0 = topo, 1 = base). */
+export function drawPiece(g: CanvasRenderingContext2D, c: HTMLCanvasElement, x: number, y: number, scale: number, rot = 0, alpha = 1, pivot = 1) {
+  const w = c.width * scale, h = c.height * scale;
+  g.save();
+  g.imageSmoothingEnabled = false;
+  g.globalAlpha = Math.max(0, Math.min(1, alpha));
+  g.translate(Math.round(x), Math.round(y - h * (1 - pivot)));
+  if (rot) g.rotate(rot);
+  g.drawImage(c, -Math.round(w / 2), -Math.round(h * pivot), w, h);
+  g.restore();
 }
 
 /** Disco pixelado de raio `r` (em px de efeito), centro em (cx, cy). */

@@ -3,11 +3,13 @@
 //! logado (OAuth) e dança quando o Spotify está em foco.
 
 mod claude;
+mod github;
 mod hooks_install;
 mod media;
 mod opencode;
 mod pipe;
 mod screen;
+mod sessions;
 mod sprites;
 mod store;
 mod winsys;
@@ -39,6 +41,21 @@ struct Attach(Mutex<Option<Value>>);
 /// A tela congelada do recorte estilo Lightshot, enquanto a janela está aberta.
 #[derive(Default)]
 struct Snip(Mutex<Option<Value>>);
+
+/// Último sinal de vida da página do pet e quantas vezes o vigia já agiu desde
+/// então. O processo do WebView2 pode cair sozinho (falta de memória, driver de
+/// vídeo) e aí o pet some da tela sem o app fechar.
+struct Alive(Mutex<(Instant, u32)>);
+
+impl Default for Alive {
+    fn default() -> Self {
+        Self(Mutex::new((Instant::now(), 0)))
+    }
+}
+
+/// Sem sinal da página por este tempo (ela manda a cada 10 s), o vigia age.
+/// Folgado: o Chromium segura os timers de páginas escondidas por até 1 min.
+const PET_SILENT: Duration = Duration::from_secs(150);
 
 // ── Relay (digitama-hook.exe) ────────────────────────────────────────────────
 
@@ -112,16 +129,20 @@ fn open_window_impl(app: &AppHandle, name: &str) {
         return;
     }
     let (url, title, w, h) = match name {
-        "chat" => ("chat.html", "Digitama — Chat com o Claude", 460.0, 680.0),
+        "chat" => ("chat.html", "Digitama — Chat com o Claude", 780.0, 680.0),
         "settings" => ("settings.html", "Digitama — Digivice", 980.0, 660.0),
         _ => return,
     };
-    let built = WebviewWindowBuilder::new(app, name, WebviewUrl::App(url.into()))
+    let mut builder = WebviewWindowBuilder::new(app, name, WebviewUrl::App(url.into()))
         .title(title)
         .inner_size(w, h)
         .min_inner_size(380.0, 420.0)
-        .center()
-        .build();
+        .center();
+    if name == "chat" {
+        // arrastar arquivos para o chat: o soltar fica com a página, não com o Tauri
+        builder = builder.disable_drag_drop_handler();
+    }
+    let built = builder.build();
     match built {
         Ok(win) => {
             let _ = win.set_focus();
@@ -130,9 +151,11 @@ fn open_window_impl(app: &AppHandle, name: &str) {
     }
 }
 
-fn place_pet(app: &AppHandle) {
+/// Põe o pet na posição salva ou, sem ela (ou com `use_saved` falso), no canto
+/// de baixo à direita do monitor principal.
+fn place_pet(app: &AppHandle, use_saved: bool) {
     let Some(win) = app.get_webview_window("pet") else { return };
-    let saved = app.state::<Store>().get().pos;
+    let saved = app.state::<Store>().get().pos.filter(|_| use_saved);
     let on_screen = |(x, y): (i32, i32)| {
         win.available_monitors().unwrap_or_default().iter().any(|m| {
             let p = m.position();
@@ -163,31 +186,58 @@ fn toggle_pet(app: &AppHandle, visible: Option<bool>) {
 }
 
 /// Clique-através: fora das regiões do pet a janela ignora o mouse. Também
-/// salva a posição quando o pet fica parado depois de arrastado.
+/// salva a posição quando o pet fica parado depois de arrastado e, a cada
+/// poucos segundos, cuida para ele não sumir (ver `keep_pet_alive`).
 fn start_hit_poll(app: AppHandle) {
     std::thread::spawn(move || {
+        // Daqui em diante só Win32 direto pelo HWND (ver `winsys`).
+        let hwnd = loop {
+            if let Some(h) = app.get_webview_window("pet").and_then(|w| w.hwnd().ok()) {
+                break h.0 as isize;
+            }
+            std::thread::sleep(Duration::from_millis(250));
+        };
         let mut accepting: Option<bool> = None;
         let mut last_pos: Option<(i32, i32)> = None;
         let mut moved_at: Option<Instant> = None;
+        let mut last_tick = Instant::now();
+        let mut last_check = Instant::now();
+        let mut was_visible = false;
         loop {
             std::thread::sleep(Duration::from_millis(33));
-            let Some(win) = app.get_webview_window("pet") else { continue };
-            if !win.is_visible().unwrap_or(false) {
+            // Uma volta muito atrasada é o PC saindo da suspensão: a página
+            // também esteve parada, não está morta.
+            if last_tick.elapsed() > Duration::from_secs(3) {
+                pet_alive(app.state::<Alive>());
+            }
+            last_tick = Instant::now();
+            let visible = winsys::window_visible(hwnd);
+            if visible != was_visible {
+                was_visible = visible;
+                accepting = None;
+                // escondida, a página fica com os timers presos: recomeça a contagem
+                pet_alive(app.state::<Alive>());
+            }
+            if !visible {
                 continue;
             }
-            let (Ok(pos), Ok(scale)) = (win.outer_position(), win.scale_factor()) else { continue };
-            if last_pos != Some((pos.x, pos.y)) {
+            let Some((x, y, w, h, scale)) = winsys::window_rect(hwnd) else { continue };
+            if last_pos != Some((x, y)) {
                 if last_pos.is_some() {
                     moved_at = Some(Instant::now());
                 }
-                last_pos = Some((pos.x, pos.y));
+                last_pos = Some((x, y));
             }
             if moved_at.is_some_and(|t| t.elapsed() > Duration::from_millis(800)) {
                 moved_at = None;
-                app.state::<Store>().update_quiet(|s| s.pos = Some((pos.x, pos.y)));
+                app.state::<Store>().update_quiet(|s| s.pos = Some((x, y)));
+            }
+            if last_check.elapsed() > Duration::from_secs(5) {
+                last_check = Instant::now();
+                keep_pet_alive(&app, hwnd, (x, y, w, h));
             }
             let Some((cx, cy)) = winsys::cursor_pos() else { continue };
-            let (lx, ly) = ((cx - pos.x) as f64 / scale, (cy - pos.y) as f64 / scale);
+            let (lx, ly) = ((cx - x) as f64 / scale, (cy - y) as f64 / scale);
             let accept = app
                 .state::<Hit>()
                 .0
@@ -197,11 +247,48 @@ fn start_hit_poll(app: AppHandle) {
                 .any(|[x, y, w, h]| lx >= *x && ly >= *y && lx < x + w && ly < y + h);
             if accepting != Some(accept) {
                 accepting = Some(accept);
-                let _ = win.set_ignore_cursor_events(!accept);
+                if let Some(win) = app.get_webview_window("pet") {
+                    let _ = win.set_ignore_cursor_events(!accept);
+                }
                 let _ = app.emit_to("pet", "pet-hover", accept);
             }
         }
     });
+}
+
+/// O que fazia o pet sumir com o app aberto por muito tempo:
+///  * o Windows tira o "sempre por cima" (tela cheia, troca de usuário…);
+///  * o monitor onde ele estava foi desligado ou mudou de resolução;
+///  * o processo do WebView2 caiu e a janela ficou vazia — sem sinal da página
+///    o vigia recarrega; se nem assim voltar, reinicia o app. Nunca com um
+///    pedido de permissão esperando no balão.
+fn keep_pet_alive(app: &AppHandle, hwnd: isize, (x, y, w, h): (i32, i32, i32, i32)) {
+    winsys::ensure_topmost(hwnd);
+    // o chão do pet (a faixa de baixo da janela) precisa estar em algum monitor
+    let feet = y + h - h / 10;
+    if ![w / 4, w / 2, w * 3 / 4].iter().any(|dx| winsys::point_on_screen(x + dx, feet)) {
+        log_line(app, "vigia", "o pet estava fora das telas; voltou para o canto");
+        place_pet(app, false);
+    }
+    let tries = {
+        let alive = app.state::<Alive>();
+        let mut guard = alive.0.lock().unwrap();
+        if guard.0.elapsed() < PET_SILENT || !app.state::<pipe::Pending>().0.lock().unwrap().is_empty() {
+            return;
+        }
+        *guard = (Instant::now(), guard.1 + 1);
+        guard.1
+    };
+    if tries == 1 {
+        log_line(app, "vigia", "a página do pet parou de responder; recarregando");
+        if let Some(win) = app.get_webview_window("pet") {
+            let _ = win.reload();
+        }
+    } else {
+        log_line(app, "vigia", "a página do pet não voltou; reiniciando o Digitama");
+        claude::stop_all(app);
+        app.restart();
+    }
 }
 
 // ── Print da tela ────────────────────────────────────────────────────────────
@@ -231,8 +318,8 @@ async fn capture_clean(app: &AppHandle, hide: &[&str]) -> Result<Value, String> 
     Ok(json!({ "png": s.png_base64, "width": s.width, "height": s.height }))
 }
 
-/// Recorte estilo Lightshot: congela o monitor do cursor (sem o pet e o chat)
-/// e abre por cima dele uma janela sem bordas para selecionar e anotar.
+/// Recorte estilo Lightshot: congela todas as telas (sem o pet e o chat) e abre
+/// por cima delas uma janela sem bordas para selecionar e anotar.
 async fn open_snip(app: AppHandle) {
     let mut hidden = Vec::new();
     for label in ["pet", "chat"] {
@@ -266,19 +353,25 @@ async fn open_snip(app: AppHandle) {
     // própria página chama `snip_ready` para aparecer quando o print carregou.
     let win = match app.get_webview_window("snip") {
         Some(win) => {
-            let _ = win.set_position(PhysicalPosition::new(x, y));
-            let _ = win.set_size(tauri::PhysicalSize::new(w as u32, h as u32));
+            cover(&win, (x, y, w, h));
             let _ = app.emit_to("snip", "snip-load", ());
             return;
         }
         None => build_snip(&app),
     };
     match win {
-        Ok(win) => {
-            let _ = win.set_position(PhysicalPosition::new(x, y));
-            let _ = win.set_size(tauri::PhysicalSize::new(w as u32, h as u32));
-        }
+        Ok(win) => cover(&win, (x, y, w, h)),
         Err(e) => eprintln!("[digitama] não abri a captura: {e}"),
+    }
+}
+
+/// Estica a janela do recorte sobre a área (pixels físicos). Duas vezes: com
+/// monitores de escalas diferentes, mudar de monitor faz o Windows propor outro
+/// tamanho (DPI novo); a segunda vez já acontece na escala final.
+fn cover(win: &tauri::WebviewWindow, (x, y, w, h): (i32, i32, i32, i32)) {
+    for _ in 0..2 {
+        let _ = win.set_position(PhysicalPosition::new(x, y));
+        let _ = win.set_size(tauri::PhysicalSize::new(w as u32, h as u32));
     }
 }
 
@@ -319,6 +412,12 @@ fn state_get(store: State<Store>) -> PetState {
 #[tauri::command]
 fn state_set(app: AppHandle, store: State<Store>, patch: Value) -> Result<PetState, String> {
     store.patch(&app, &patch)
+}
+
+/// Sinal de vida da página do pet (a cada 10 s).
+#[tauri::command]
+fn pet_alive(alive: State<Alive>) {
+    *alive.0.lock().unwrap() = (Instant::now(), 0);
 }
 
 #[tauri::command]
@@ -368,20 +467,133 @@ fn open_window_later(app: &AppHandle, name: &'static str) {
 }
 
 #[tauri::command]
-async fn chat_send(app: AppHandle, text: String, image: Option<String>, persona: Option<String>) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || claude::send(&app, &text, image.as_deref(), persona.as_deref()))
+async fn chat_send(app: AppHandle, conv: String, text: String, attachments: Vec<claude::Attachment>, persona: Option<String>) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || claude::send(&app, &conv, &text, &attachments, persona.as_deref()))
         .await
         .map_err(|e| e.to_string())?
 }
 
+/// Escolhe a pasta de um projeto (o seletor do Windows, por cima do chat).
 #[tauri::command]
-fn chat_stop(app: AppHandle) {
-    claude::stop(&app);
+async fn chat_folder_pick(app: AppHandle) -> Option<String> {
+    let owner = app.get_webview_window("chat").and_then(|w| w.hwnd().ok()).map(|h| h.0 as isize);
+    tauri::async_runtime::spawn_blocking(move || winsys::pick_folder(owner, "Escolha a pasta do projeto"))
+        .await
+        .ok()
+        .flatten()
+        .map(|p| p.to_string_lossy().into_owned())
+}
+
+/// As conversas abertas no chat (as abas).
+#[tauri::command]
+fn chat_list(app: AppHandle) -> Vec<claude::ConvInfo> {
+    claude::list(&app)
+}
+
+/// Uma conversa nova trabalhando em `path` (`None` = a pasta do Digitama).
+#[tauri::command]
+fn chat_new(app: AppHandle, path: Option<String>) -> Result<String, String> {
+    let path = path.unwrap_or_default();
+    if !path.is_empty() && !PathBuf::from(&path).is_dir() {
+        return Err(format!("Pasta não encontrada: {path}"));
+    }
+    Ok(claude::create(&app, &path))
 }
 
 #[tauri::command]
-fn chat_reset(app: AppHandle) {
-    claude::reset(&app);
+fn chat_close(app: AppHandle, conv: String) {
+    claude::close(&app, &conv);
+}
+
+/// Comandos de barra, MCPs e ferramentas que o chat tem na pasta `cwd`.
+#[tauri::command]
+async fn chat_capabilities(app: AppHandle, cwd: String) -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(move || claude::capabilities(&app, &cwd)).await.map_err(|e| e.to_string())?
+}
+
+/// O cartão do GitHub da pasta `cwd` (null se não for um repositório).
+#[tauri::command]
+async fn github_status(app: AppHandle, cwd: String) -> Value {
+    let dir = claude::work_dir_for(&app, &cwd);
+    tauri::async_runtime::spawn_blocking(move || github::status(&dir)).await.unwrap_or(Value::Null)
+}
+
+#[tauri::command]
+fn open_url(url: String) -> Result<(), String> {
+    github::open(&url)
+}
+
+/// Uma conversa, para a página redesenhar ao trocar de aba ou recarregar.
+#[tauri::command]
+fn chat_history(app: AppHandle, conv: String) -> Value {
+    claude::history(&app, &conv)
+}
+
+/// Responde a um pedido de permissão ou a uma pergunta (`input` com as respostas).
+#[tauri::command]
+fn chat_permission(app: AppHandle, conv: String, request_id: String, allow: bool, always: bool, input: Option<Value>) -> Result<(), String> {
+    claude::answer_permission(&app, &conv, &request_id, allow, always, input)
+}
+
+/// O ditado do Windows (Win+H) no campo em foco: o chat foca a caixa de texto
+/// antes de chamar.
+#[tauri::command]
+fn dictate() {
+    winsys::voice_typing();
+}
+
+#[tauri::command]
+fn chat_stop(app: AppHandle, conv: String) {
+    claude::stop(&app, &conv);
+}
+
+#[tauri::command]
+fn chat_reset(app: AppHandle, conv: String) {
+    claude::reset(&app, &conv);
+}
+
+/// As sessões do Claude Code no VS Code: ativas e dos últimos 7 dias.
+#[tauri::command]
+async fn sessions_list(app: AppHandle) -> Vec<sessions::SessionInfo> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let internal = app.state::<Store>().data_dir();
+        sessions::list(&app.state::<sessions::Cache>(), &app.state::<sessions::Live>(), 7, &internal)
+    })
+    .await
+    .unwrap_or_default()
+}
+
+/// "Continuar aqui": uma conversa do chat continua uma cópia da sessão `id`
+/// (a que já a continua, a `reuse` se estiver vazia, ou uma nova). Devolve a
+/// conversa e as últimas falas da sessão.
+#[tauri::command]
+async fn session_continue(app: AppHandle, id: String, title: String, project: String, cwd: String, reuse: Option<String>) -> Result<Value, String> {
+    if !sessions::valid_id(&id) {
+        return Err("id de sessão inválido".into());
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        let internal = app.state::<Store>().data_dir();
+        let path = sessions::find(&id, &internal).ok_or("Sessão não encontrada.")?;
+        let recent = sessions::tail(&path, 6);
+        // A conversa trabalha na pasta da sessão, onde o transcrito já está (o
+        // --fork-session o acha lá). Sem a pasta, uma cópia vai para a do chat.
+        let folder = PathBuf::from(&cwd);
+        let same_project = path
+            .parent()
+            .and_then(|p| p.file_name())
+            .is_some_and(|n| n.to_string_lossy().eq_ignore_ascii_case(&sessions::project_key(&folder)));
+        let work = if folder.is_dir() && same_project {
+            cwd.clone()
+        } else {
+            sessions::copy_for_chat(&path, &id, &claude::chat_dir(&app))?;
+            String::new()
+        };
+        let shown = json!({ "type": "digitama_continue", "id": id, "title": title, "project": project, "recent": recent });
+        let key = claude::continue_session(&app, &id, &work, &title, reuse.as_deref(), shown);
+        Ok(json!({ "conv": key, "recent": recent }))
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -463,6 +675,11 @@ async fn attach_to_chat(app: AppHandle, png: String, width: u32, height: u32) {
     *app.state::<Attach>().0.lock().unwrap() = Some(json!({ "png": png, "width": width, "height": height }));
     open_window_impl(&app, "chat");
     let _ = app.emit_to("chat", "chat-attach", ());
+}
+
+#[tauri::command]
+fn media_state(current: State<media::Current>) -> media::MediaState {
+    current.0.lock().unwrap().clone()
 }
 
 #[tauri::command]
@@ -584,14 +801,18 @@ fn sprites_dir(app: &AppHandle) -> PathBuf {
 
 /// Os PNGs da pasta de sprites como data URLs: `<id>.png` vira a chave `id`
 /// (pose parada), e `<id>/<pose>.png` vira `id/pose` (idle, attack, hit…).
+/// Com `ids`, só os desses Digimon (o pet pede só os da linha atual).
 /// Arquivos acima de 2 MB ou sem a assinatura PNG são ignorados.
 #[tauri::command]
-fn custom_sprites(app: AppHandle) -> Map<String, Value> {
+fn custom_sprites(app: AppHandle, ids: Option<Vec<String>>) -> Map<String, Value> {
     let mut out = Map::new();
     let Ok(entries) = std::fs::read_dir(sprites_dir(&app)) else { return out };
     for entry in entries.flatten() {
         let path = entry.path();
         let Some(name) = path.file_stem().and_then(|s| s.to_str()).map(|s| s.to_lowercase()) else { continue };
+        if ids.as_ref().is_some_and(|ids| !ids.iter().any(|id| id.eq_ignore_ascii_case(&name))) {
+            continue;
+        }
         if path.is_dir() {
             let Ok(poses) = std::fs::read_dir(&path) else { continue };
             for pose in poses.flatten() {
@@ -686,6 +907,10 @@ fn autostart_set(app: AppHandle, on: bool) -> Result<bool, String> {
 /// Erros do frontend (ex.: o laço de desenho do pet) vão para digitama.log.
 #[tauri::command]
 fn log_error(app: AppHandle, window: tauri::Window, message: String) {
+    log_line(&app, window.label(), &message);
+}
+
+fn log_line(app: &AppHandle, origin: &str, message: &str) {
     use std::io::Write;
     let path = app.state::<Store>().data_dir().join("digitama.log");
     // o log não cresce sem fim
@@ -695,7 +920,7 @@ fn log_error(app: AppHandle, window: tauri::Window, message: String) {
     if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
         let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
         let text: String = message.chars().take(2000).collect();
-        let _ = writeln!(f, "[{secs}] {}: {text}", window.label());
+        let _ = writeln!(f, "[{secs}] {origin}: {text}");
     }
 }
 
@@ -706,7 +931,7 @@ fn pet_visibility(app: AppHandle, visible: Option<bool>) {
 
 #[tauri::command]
 fn quit(app: AppHandle) {
-    claude::stop(&app);
+    claude::stop_all(&app);
     app.exit(0);
 }
 
@@ -738,7 +963,7 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
             "toggle" => toggle_pet(app, None),
             "settings" => open_window_later(app, "settings"),
             "quit" => {
-                claude::stop(app);
+                claude::stop_all(app);
                 app.exit(0);
             }
             _ => {}
@@ -790,11 +1015,15 @@ pub fn run() {
         .manage(Hit::default())
         .manage(Attach::default())
         .manage(Snip::default())
+        .manage(Alive::default())
+        .manage(media::Current::default())
+        .manage(sessions::Cache::default())
+        .manage(sessions::Live::default())
         .setup(|app| {
             let handle = app.handle().clone();
             app.manage(Store::load(&handle));
             ensure_hook_exe(&handle);
-            place_pet(&handle);
+            place_pet(&handle, true);
             pipe::start(handle.clone());
             media::start(handle.clone());
             start_usage_poll(handle.clone());
@@ -851,6 +1080,7 @@ pub fn run() {
             state_get,
             state_set,
             hit_regions,
+            pet_alive,
             hook_ack,
             hook_decline,
             hook_answer,
@@ -861,6 +1091,18 @@ pub fn run() {
             chat_stop,
             chat_reset,
             chat_take_attachment,
+            chat_permission,
+            chat_history,
+            chat_folder_pick,
+            chat_list,
+            chat_new,
+            chat_close,
+            chat_capabilities,
+            github_status,
+            open_url,
+            dictate,
+            sessions_list,
+            session_continue,
             capture_screen,
             screenshot_and_ask,
             snip_open,
@@ -871,6 +1113,7 @@ pub fn run() {
             copy_png,
             attach_to_chat,
             media_control,
+            media_state,
             hooks_status,
             hooks_preview,
             hooks_apply,

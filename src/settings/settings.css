@@ -98,14 +98,16 @@ body.settings {
   position: absolute;
   left: 50%;
   top: 50%;
-  transform: translate(-50%, -62%);
+  transform: translate(-50%, -55%);
   image-rendering: pixelated;
 }
 
+/* A faixa fica abaixo do Digimon: no meio do círculo ela cortava as pernas dos
+   maiores (Alphamon, Doruguremon, Gallantmon). */
 .dial-label {
   position: absolute;
   left: 50%;
-  top: 58%;
+  top: 76%;
   transform: translateX(-50%);
   min-width: 150px;
   text-align: center;
@@ -139,7 +141,7 @@ body.settings {
   clip-path: polygon(0 0, calc(100% - 14px) 0, 100% 50%, calc(100% - 14px) 100%, 0 100%);
 }
 .wallet b {
-  font: 12px var(--dv-title);
+  font: 16px var(--dv-title);
   color: var(--dv-gold);
   margin-right: 8px;
 }
@@ -231,7 +233,7 @@ code {
   gap: 4px;
 }
 .b-name {
-  font: 11px var(--dv-title);
+  font: 8px var(--dv-title);
 }
 .b-row {
   display: flex;
@@ -359,7 +361,7 @@ pre .del {
   border-bottom: 2px dotted rgba(63, 224, 255, 0.3);
 }
 .keys b {
-  font: 10px var(--dv-title);
+  font: 8px var(--dv-title);
   color: var(--dv-gold);
   align-self: center;
 }
@@ -386,7 +388,7 @@ pre .del {
   flex-direction: column;
 }
 .check-row b {
-  font: 10px var(--dv-title);
+  font: 8px var(--dv-title);
   color: var(--dv-ice);
 }
 .dot {

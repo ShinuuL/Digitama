@@ -41,6 +41,8 @@ npm run pack          # instalador NSIS em target/release/bundle/nsis/
 
 Testes: `cargo test --workspace` (relay e app) e `npx tsc --noEmit` (frontend).
 
+Artes: os efeitos do pet ficam em `art/fx/*.aseprite` e os ícones do Digivice em `art/icons/*.aseprite`; depois de editar no Aseprite, `node scripts/export-art.mjs` gera `src/pet/art.gen.ts` e `src/shared/icons.gen.ts`. A fonte pixel "Digivice" é a folha `art/font/digivice.aseprite` (ordem dos glifos em `charset.txt`); `python scripts/build-font.py` (Pillow + fontTools) gera `src/shared/fonts/*.ttf`. `node scripts/check-walk.mjs` confere os passos gerados a partir dos sprites do DS da sua pasta local (fidelidade por quadro, folha de prévia e GIFs).
+
 ## Como usar
 
 | Ação | O que acontece |
@@ -70,6 +72,8 @@ Escolha quem responde no topo do chat (ou em Digivice → Chat):
 - **OpenCode**: cada mensagem é um `opencode run --format json` (mensagem pelo stdin, print com `-f`, conversa continuada com `--session`). O modelo é qualquer `provedor/modelo` do seu OpenCode — **Carregar modelos** lista os disponíveis.
 
 O chat roda em `%APPDATA%\br.com.mastersys.digitama\chat`, nunca dentro dos seus projetos. Com *persona* ligada, a IA responde no papel do Digimon atual, mas a resposta técnica vem primeiro.
+
+**Sessões do VS Code:** a faixa à esquerda do chat (☰ esconde) lista as sessões do Claude Code abertas pela extensão do VS Code: as ativas agora, com o que estão fazendo, e as dos últimos 7 dias. **VS Code** traz a janela daquela sessão para frente; **Continuar aqui** abre uma cópia da conversa no chat (`--resume … --fork-session`), com todo o contexto, sem alterar a do VS Code. Só o título, a pasta e o branch são lidos para a lista.
 
 ### Captura (estilo Lightshot)
 

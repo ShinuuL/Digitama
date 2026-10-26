@@ -3,6 +3,20 @@
 @import "@fontsource/press-start-2p/400.css";
 @import "@fontsource/vt323/400.css";
 
+/* A fonte pixel do Digivice, feita no Aseprite (art/font/digivice.aseprite →
+   python scripts/build-font.py). Nítida em 8px, 16px, 24px…: cada pixel da
+   fonte cai num pixel da tela. A Press Start 2P fica de reserva. */
+@font-face {
+  font-family: "Digivice";
+  src: url("./fonts/Digivice.ttf") format("truetype");
+  font-display: block;
+}
+@font-face {
+  font-family: "Digivice Fino";
+  src: url("./fonts/DigiviceFino.ttf") format("truetype");
+  font-display: block;
+}
+
 :root {
   --dv-deep: #061238;
   --dv-blue: #0b2a7a;
@@ -14,7 +28,7 @@
   --dv-green: #3dff8a;
   --dv-ink: #eaf6ff;
   --dv-dark: #0b0820;
-  --dv-title: "Press Start 2P", "Cascadia Mono", monospace;
+  --dv-title: "Digivice", "Press Start 2P", "Cascadia Mono", monospace;
   --dv-body: "VT323", "Cascadia Mono", Consolas, monospace;
 }
 
@@ -72,7 +86,7 @@
 .dv-banner {
   display: inline-block;
   padding: 7px 22px 7px 16px;
-  font: 12px var(--dv-title);
+  font: 16px var(--dv-title);
   color: #fff;
   letter-spacing: 0.04em;
   text-shadow: 2px 2px 0 var(--dv-dark);
@@ -94,7 +108,7 @@
 }
 
 .dv-label {
-  font: 9px var(--dv-title);
+  font: 8px var(--dv-title);
   color: var(--dv-cyan);
   text-transform: uppercase;
   letter-spacing: 0.06em;

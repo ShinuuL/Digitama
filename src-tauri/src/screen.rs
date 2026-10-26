@@ -38,10 +38,14 @@ pub fn capture(all: bool) -> Result<Shot, String> {
     Ok(Shot { png_base64: base64::engine::general_purpose::STANDARD.encode(png), width: ow, height: oh })
 }
 
-/// O monitor do cursor em resolução cheia, para o recorte estilo Lightshot,
-/// com o retângulo dele em pixels físicos (x, y, largura, altura).
+/// Todas as telas em resolução cheia, para o recorte estilo Lightshot (dá para
+/// recortar em qualquer monitor, ou pegar um pedaço de cada), com o retângulo
+/// da área de trabalho virtual em pixels físicos (x, y, largura, altura).
 pub fn capture_full() -> Result<(Shot, (i32, i32, i32, i32)), String> {
-    let rect = cursor_monitor()?;
+    let rect = virtual_screen();
+    if rect.2 <= 0 || rect.3 <= 0 {
+        return Err("tela sem tamanho".into());
+    }
     let (x, y, w, h) = rect;
     let bgra = grab(x, y, w, h)?;
     let mut rgb = Vec::with_capacity((w * h * 3) as usize);

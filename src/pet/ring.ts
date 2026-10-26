@@ -55,7 +55,7 @@ export class Ring {
       b.style.setProperty("--y", `${Math.sin(a) * R}px`);
       b.style.setProperty("--i", String(i));
       b.title = item.label;
-      b.append(iconImg(item.icon, item.color ?? "#ffd23f", 3));
+      b.append(iconImg(item.icon, item.color ?? "#ffd23f", 2));
       b.onmouseenter = () => {
         this.banner.textContent = item.label;
         this.root.querySelectorAll(".ring-item.on").forEach((e) => e.classList.remove("on"));

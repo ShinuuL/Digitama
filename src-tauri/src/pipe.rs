@@ -32,6 +32,7 @@ use crate::store::Store;
 const DECISION_TIMEOUT: Duration = Duration::from_secs(108);
 const ACK_TIMEOUT: Duration = Duration::from_millis(1200);
 const MAX_PAYLOAD: usize = 1 << 20;
+const READ_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub enum Reply {
     Ack,
@@ -87,17 +88,23 @@ pub fn start(app: AppHandle) {
 async fn handle(app: AppHandle, mut pipe: NamedPipeServer) {
     let mut buf = Vec::new();
     let mut chunk = [0u8; 4096];
-    loop {
-        match pipe.read(&mut chunk).await {
-            Ok(0) => break,
-            Ok(n) => {
-                buf.extend_from_slice(&chunk[..n]);
-                if buf.contains(&b'\n') || buf.len() > MAX_PAYLOAD {
-                    break;
+    let read_line = async {
+        loop {
+            match pipe.read(&mut chunk).await {
+                Ok(0) => return true,
+                Ok(n) => {
+                    buf.extend_from_slice(&chunk[..n]);
+                    if buf.contains(&b'\n') || buf.len() > MAX_PAYLOAD {
+                        return true;
+                    }
                 }
+                Err(_) => return false,
             }
-            Err(_) => return,
         }
+    };
+    // um cliente que conecta e não manda nada não segura a conexão para sempre
+    if !matches!(tokio::time::timeout(READ_TIMEOUT, read_line).await, Ok(true)) {
+        return;
     }
     let line = match buf.iter().position(|b| *b == b'\n') {
         Some(i) => &buf[..i],
@@ -120,6 +127,10 @@ async fn handle(app: AppHandle, mut pipe: NamedPipeServer) {
     }
 
     let event = payload.get("hook_event_name").and_then(Value::as_str).unwrap_or_default().to_string();
+    // a faixa de sessões do chat acompanha o que cada sessão está fazendo
+    if crate::sessions::on_hook(&app.state::<crate::sessions::Live>(), &payload) {
+        let _ = app.emit_to("chat", "sessions-changed", ());
+    }
     if event == "StatusLine" {
         // uso do plano do Claude (vem da barra de status): guarda e avisa as janelas
         if let Some(limits) = payload.get("rate_limits").cloned() {
@@ -131,6 +142,12 @@ async fn handle(app: AppHandle, mut pipe: NamedPipeServer) {
     }
     if event != "PermissionRequest" {
         let _ = app.emit_to("pet", "hook", payload);
+        let _ = pipe.disconnect();
+        return;
+    }
+    // Do próprio chat do Digitama: a permissão é pedida no chat (control_request),
+    // não no balão do pet. Sem resposta aqui, o Claude Code pergunta lá.
+    if payload.get("digitama_internal").and_then(Value::as_bool) == Some(true) {
         let _ = pipe.disconnect();
         return;
     }

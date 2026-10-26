@@ -4,7 +4,9 @@
 //! `focus_vscode` é adaptado do `vscode_focus.rs` do Coucou (MIT, © Louis Raillé).
 
 use windows::core::{BOOL, PWSTR};
-use windows::Win32::Foundation::{CloseHandle, LocalFree, HANDLE, HLOCAL, HWND, LPARAM, POINT};
+use windows::Win32::Foundation::{CloseHandle, LocalFree, HANDLE, HLOCAL, HWND, LPARAM, POINT, RECT};
+use windows::Win32::Graphics::Gdi::{MonitorFromPoint, MONITOR_DEFAULTTONULL};
+use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::Security::Authorization::ConvertSidToStringSidW;
 use windows::Win32::Security::{GetTokenInformation, TokenUser, TOKEN_QUERY, TOKEN_USER};
 use windows::Win32::System::Pipes::GetNamedPipeClientProcessId;
@@ -14,8 +16,10 @@ use windows::Win32::System::Threading::{
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{keybd_event, KEYBD_EVENT_FLAGS, KEYEVENTF_KEYUP, VK_MENU};
 use windows::Win32::UI::WindowsAndMessaging::{
-    EnumWindows, GetCursorPos, GetForegroundWindow, GetWindowTextLengthW, GetWindowTextW,
-    GetWindowThreadProcessId, IsIconic, IsWindowVisible, SetForegroundWindow, ShowWindow, SW_RESTORE,
+    EnumWindows, GetCursorPos, GetForegroundWindow, GetWindowLongPtrW, GetWindowRect, GetWindowTextLengthW,
+    GetWindowTextW, GetWindowThreadProcessId, IsIconic, IsWindowVisible, SetForegroundWindow, SetWindowPos,
+    ShowWindow, GWL_EXSTYLE, HWND_TOPMOST, SWP_ASYNCWINDOWPOS, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOOWNERZORDER,
+    SWP_NOSIZE, SW_RESTORE, WS_EX_TOPMOST,
 };
 
 // ── Identidade ───────────────────────────────────────────────────────────────
@@ -73,10 +77,15 @@ pub fn cursor_pos() -> Option<(i32, i32)> {
     Some((p.x, p.y))
 }
 
-/// Nome do executável da janela em primeiro plano, em minúsculas ("spotify.exe").
-pub fn foreground_exe() -> Option<String> {
+/// A janela em primeiro plano (0 = nenhuma).
+pub fn foreground_window() -> isize {
+    unsafe { GetForegroundWindow().0 as isize }
+}
+
+/// Nome do executável dono da janela, em minúsculas ("spotify.exe").
+pub fn window_exe(raw: isize) -> Option<String> {
     unsafe {
-        let hwnd = GetForegroundWindow();
+        let hwnd = HWND(raw as *mut _);
         if hwnd.0.is_null() {
             return None;
         }
@@ -95,6 +104,83 @@ pub fn foreground_exe() -> Option<String> {
         }
         let path = String::from_utf16_lossy(&buf[..size as usize]);
         path.rsplit(['\\', '/']).next().map(|s| s.to_lowercase())
+    }
+}
+
+/// Abre o ditado do Windows (Win+H) no campo de texto em foco. É o clique no
+/// 🎤 do chat que pede: o Windows só aceita a tecla do app em primeiro plano.
+pub fn voice_typing() {
+    const VK_LWIN: u8 = 0x5B;
+    const VK_H: u8 = 0x48;
+    unsafe {
+        keybd_event(VK_LWIN, 0, KEYBD_EVENT_FLAGS(0), 0);
+        keybd_event(VK_H, 0, KEYBD_EVENT_FLAGS(0), 0);
+        keybd_event(VK_H, 0, KEYEVENTF_KEYUP, 0);
+        keybd_event(VK_LWIN, 0, KEYEVENTF_KEYUP, 0);
+    }
+}
+
+/// O seletor de pasta do Windows (o mesmo do Explorer). `None` se cancelar.
+pub fn pick_folder(owner: Option<isize>, title: &str) -> Option<std::path::PathBuf> {
+    use windows::core::HSTRING;
+    use windows::Win32::System::Com::{
+        CoCreateInstance, CoInitializeEx, CoTaskMemFree, CoUninitialize, CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED,
+    };
+    use windows::Win32::UI::Shell::{FileOpenDialog, IFileOpenDialog, FOS_FORCEFILESYSTEM, FOS_PICKFOLDERS, SIGDN_FILESYSPATH};
+    unsafe {
+        let init = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+        let picked = (|| -> windows::core::Result<Option<std::path::PathBuf>> {
+            let dialog: IFileOpenDialog = CoCreateInstance(&FileOpenDialog, None, CLSCTX_INPROC_SERVER)?;
+            dialog.SetOptions(dialog.GetOptions()? | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM)?;
+            dialog.SetTitle(&HSTRING::from(title))?;
+            if dialog.Show(owner.map(|h| HWND(h as *mut _))).is_err() {
+                return Ok(None); // cancelou
+            }
+            let name = dialog.GetResult()?.GetDisplayName(SIGDN_FILESYSPATH)?;
+            let path = name.to_string().ok().map(std::path::PathBuf::from);
+            CoTaskMemFree(Some(name.0 as *const _));
+            Ok(path)
+        })();
+        if init.is_ok() {
+            CoUninitialize();
+        }
+        picked.ok().flatten()
+    }
+}
+
+// ── A janela do pet ──────────────────────────────────────────────────────────
+// Win32 direto pelo HWND, de qualquer thread. Os métodos da janela do Tauri
+// esperam a thread principal a cada chamada; o laço do clique-através faz
+// isso 30 vezes por segundo.
+
+/// Posição e tamanho (pixels físicos) e escala de DPI da janela.
+pub fn window_rect(raw: isize) -> Option<(i32, i32, i32, i32, f64)> {
+    let hwnd = HWND(raw as *mut _);
+    let mut r = RECT::default();
+    unsafe { GetWindowRect(hwnd, &mut r).ok()? };
+    let dpi = unsafe { GetDpiForWindow(hwnd) };
+    let scale = if dpi == 0 { 1.0 } else { f64::from(dpi) / 96.0 };
+    Some((r.left, r.top, r.right - r.left, r.bottom - r.top, scale))
+}
+
+pub fn window_visible(raw: isize) -> bool {
+    unsafe { IsWindowVisible(HWND(raw as *mut _)).as_bool() }
+}
+
+/// O ponto (pixels físicos) está em algum monitor?
+pub fn point_on_screen(x: i32, y: i32) -> bool {
+    unsafe { !MonitorFromPoint(POINT { x, y }, MONITOR_DEFAULTTONULL).0.is_null() }
+}
+
+/// Devolve o "sempre por cima" se o Windows o tirou (sem ativar nem mover).
+pub fn ensure_topmost(raw: isize) {
+    let hwnd = HWND(raw as *mut _);
+    unsafe {
+        let ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32;
+        if ex & WS_EX_TOPMOST.0 == 0 {
+            let flags = SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_ASYNCWINDOWPOS;
+            let _ = SetWindowPos(hwnd, Some(HWND_TOPMOST), 0, 0, 0, 0, flags);
+        }
     }
 }
 

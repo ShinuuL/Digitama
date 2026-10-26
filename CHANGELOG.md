@@ -1,5 +1,30 @@
 # Changelog
 
+## v0.3.0 — 26/10/2026
+
+- **Várias conversas no chat, como na extensão:** cada conversa tem o seu Claude Code, a sua pasta e o seu histórico; dá para abrir outra ou trocar enquanto uma responde. A lista mostra quem está trabalhando e quem está esperando você (o pet avisa), e as conversas abertas voltam quando o app reabre.
+- **Perguntas do Claude no chat:** o AskUserQuestion aparece com as opções em botões (várias, com Confirmar), resposta livre e Pular, na conversa que perguntou.
+
+- **Ícones e fonte do Digivice feitos no Aseprite:** 25 ícones novos em 16×16 (contorno, sombra e brilho) no Digivice, no menu do pet e na captura, e a fonte pixel "Digivice" (maiúsculas, minúsculas, números e acentos do português) nos títulos e faixas. Fontes em `art/icons/` e `art/font/`.
+- **Retrato no lugar da miniatura encolhida:** os Digimon grandes (Supremos, Perfeitos) aparecem pelo rosto em tamanho real no chat, no status e no Digivice, em vez de encolhidos e quebrados.
+
+- **O chat não perde mais a conversa:** se a página recarregar (o Vite no `tauri dev` recarrega tudo quando um arquivo do app muda), a conversa, os cartões e as permissões pendentes voltam; se o app reabrir, a próxima mensagem continua a conversa anterior.
+- **Pastas de projeto:** 📁 (ou "＋" num projeto da lista) abre uma conversa trabalhando naquela pasta; continuar uma sessão do VS Code trabalha na pasta dela.
+- **Comandos de barra** (`/watch:watch`, `/compact`, as skills…) com sugestões ao digitar "/"; **MCPs e conectores** do Claude Code num painel, com interruptor por servidor.
+- **Spotify no cabeçalho** do chat, com capa do álbum e controles; **GitHub**: repositório, branch, PR com os checks do CI e suas issues (pelo `gh`), e o Claude usa o `gh` (consultas liberadas, mudanças pedem permissão).
+
+- **Chat como a extensão do VS Code:** "pensando…" com tempo e tokens, cada ferramenta num cartão (o comando, o arquivo, o padrão) com a saída recolhida, e os pedidos de permissão no próprio chat (Permitir, Sempre, Negar). Modos de permissão (Perguntar, Auto, Aceitar edições, Planejar), modelo (Fable, Opus, Sonnet, Haiku) e quanto ele pensa, direto na barra da mensagem.
+- **Anexos no chat:** imagens, PDF e arquivos de texto pelo 📎, arrastando ou colando; texto colado com mais de 2 linhas vira um .txt. 🎤 abre o ditado do Windows. Uso do plano (5h e semana) no cabeçalho.
+- **Sessões por projeto:** agrupadas por pasta, recolhíveis; clicar numa sessão já a continua no chat.
+- **Recorte em todas as telas:** o Print Screen congela todos os monitores (dá para recortar um pedaço de cada).
+
+- **Chat com as sessões do VS Code:** visual novo no estilo do Digivice e uma faixa com as sessões do Claude Code no VS Code: as abertas agora (trabalhando, esperando você) e as dos últimos 7 dias, com busca. Cada uma tem "VS Code" (traz a janela certa para frente) e "Continuar aqui" (uma cópia da conversa no chat do pet, com todo o contexto, sem mexer na original).
+
+- **Aberto o dia inteiro sem pesar:** o pet desenha a 8–30 fps conforme o que acontece (antes, a cada quadro do monitor); a leitura do Spotify reaproveita o gerenciador de mídia do Windows em vez de criar um por segundo; o clique-através não passa mais pela thread principal 30 vezes por segundo; a captura para de redesenhar e solta o print da memória ao fechar; o pet carrega só os sprites da linha atual e libera os antigos.
+- **O pet não some mais:** volta o "sempre por cima" se o Windows o tirar, volta para a tela se o monitor sumir, e a página é recarregada (ou o app reiniciado) se o WebView2 cair. Tudo registrado em `digitama.log`.
+- **Consulta de uso e relay:** a consulta ao Claude tem prazo de verdade (não trava se o `claude.exe` ficar calado) e uma conexão parada no pipe cai em 10 s.
+- **Animações:** passos de verdade em 8 quadros, feitos só deslocando os pés do próprio sprite do DS (nada redesenhado; cada quadro mantém ≥95% do desenho intacto, conferido por `scripts/check-walk.mjs`); o ovo racha conforme chega perto de chocar e a casca estoura na eclosão; bola de fogo animada, explosão em quadros, notas, coração e "!" com brilho. O golpe vira para o lado com espaço na janela (os do Gallantmon e do Alphamon nasciam fora dela e sumiam), e o medidor de uso não é mais cortado na borda. As artes novas ficam em `art/fx/*.aseprite` (`node scripts/export-art.mjs`).
+
 ## v0.2.0 — 14/10/2026
 
 - **Agentes:** OpenCode (plugin com balão de permissão, ataques e XP) além do Claude Code; chat pelo Claude Code ou pelo OpenCode.

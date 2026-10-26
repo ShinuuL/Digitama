@@ -108,7 +108,7 @@ canvas {
   bottom: 60px;
   transform: translateX(-50%);
   padding: 12px 20px;
-  font: 12px var(--dv-title);
+  font: 16px var(--dv-title);
   color: var(--dv-gold);
   background: var(--dv-blue);
   box-shadow: inset 0 0 0 3px var(--dv-cyan), 0 0 24px rgba(63, 224, 255, 0.6);

@@ -8,3 +8,6 @@ src-tauri/gen/schemas/
 release/
 assets-ref/
 src-tauri/bundled-sprites/
+
+# Playwright (testes locais)
+.playwright-mcp/

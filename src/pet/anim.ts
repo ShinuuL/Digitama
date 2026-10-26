@@ -58,10 +58,11 @@ export function base(mode: Base, t: number, walked: number): Look {
       l.breath = breathAt(t);
       break;
     case "walk": {
-      // um passo a cada ~6 px andados; o corpo sobe no meio do passo
+      // 8 quadros (src/pet/walk.ts), um a cada ~3 px andados; o corpo sobe
+      // 1 px enquanto um pé está no ar
       l.pose = "walk";
-      l.step = Math.floor(walked / 6) % 4;
-      l.dy = l.step % 2 === 0 ? -1 : 0;
+      l.step = Math.floor(walked / 3) % 8;
+      l.dy = l.step % 4 === 0 ? 0 : -1;
       break;
     }
     case "hop": {

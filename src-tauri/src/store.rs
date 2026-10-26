@@ -49,6 +49,15 @@ pub struct PetState {
     pub onboarded: bool,
     /// A cada quantos minutos consultar o uso do Claude (0 = não consultar).
     pub usage_refresh_min: u32,
+    /// Modo de permissão do chat com o Claude Code: "manual" (pergunta no
+    /// chat), "auto", "acceptEdits" ou "plan".
+    pub chat_permission_mode: String,
+    /// Esforço de pensamento do chat (`--effort`): "" (padrão) ou low…max.
+    pub chat_effort: String,
+    /// As conversas abertas no chat, para continuarem se o app reabrir.
+    pub chat_convs: Vec<SavedConv>,
+    /// Servidores MCP desligados no chat (o nome como aparece em `mcp__<nome>__…`).
+    pub chat_mcp_off: Vec<String>,
 }
 
 impl Default for PetState {
@@ -76,8 +85,26 @@ impl Default for PetState {
             opencode_model: String::new(),
             onboarded: false,
             usage_refresh_min: 10,
+            chat_permission_mode: "manual".into(),
+            chat_effort: String::new(),
+            chat_convs: Vec::new(),
+            chat_mcp_off: Vec::new(),
         }
     }
+}
+
+/// Uma conversa do chat guardada entre aberturas do app.
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct SavedConv {
+    pub key: String,
+    pub title: String,
+    /// Pasta onde a conversa trabalha (escolhida por você); "" = a do Digitama.
+    pub cwd: String,
+    /// A sessão do Claude Code desta conversa ("" = ainda nenhuma).
+    pub session: String,
+    /// A sessão do VS Code que ela continua (cópia), enquanto não houver `session`.
+    pub source: String,
 }
 
 pub struct Store {

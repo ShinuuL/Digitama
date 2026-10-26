@@ -22,7 +22,7 @@ interface Section {
 const SECTIONS: Section[] = [
   { id: "start", icon: "play", title: "Início", color: "#3dff8a" },
   { id: "digimon", icon: "egg", title: "Digimon", color: "#ffd23f" },
-  { id: "hooks", icon: "hook", title: "Agentes", color: "#3dff8a" },
+  { id: "hooks", icon: "agent", title: "Agentes", color: "#3dff8a" },
   { id: "chat", icon: "chat", title: "Chat", color: "#9fe6ff" },
   { id: "mcp", icon: "plug", title: "MCP", color: "#c48bff" },
   { id: "snip", icon: "camera", title: "Captura", color: "#ffffff" },
@@ -39,7 +39,7 @@ document.body.innerHTML = `
       <div class="dial-outer"></div>
       <div class="dial-ticks"></div>
       <div class="dial-inner"></div>
-      <canvas id="mon" width="200" height="170"></canvas>
+      <canvas id="mon" width="240" height="210"></canvas>
       <div class="dv-banner dial-label" id="dial-label">Digimon</div>
     </div>
     <div class="wallet">
@@ -63,7 +63,7 @@ SECTIONS.forEach((s, i) => {
   b.style.setProperty("--y", `${Math.sin(a) * 168}px`);
   b.style.setProperty("--i", String(i));
   b.title = s.title;
-  b.append(iconImg(s.icon, s.color, 3));
+  b.append(iconImg(s.icon, s.color, 2));
   b.onclick = () => show(s.id);
   b.onmouseenter = () => ($("#dial-label").textContent = s.title);
   b.onmouseleave = () => ($("#dial-label").textContent = SECTIONS.find((x) => x.id === current)!.title);
@@ -570,11 +570,14 @@ function animate(now: number) {
     const t = now / 1000;
     const pose: Pose = Math.floor(t / 2.4) % 4 === 3 ? "attack" : "idle";
     mg.clearRect(0, 0, monCanvas.width, monCanvas.height);
+    // cabe inteiro na área útil do mostrador (os Supremos chegam a 152 px de alto)
     const raw = monBox(m.id, 1);
-    const scale = Math.max(1, Math.floor(Math.min(150 / raw.w, 130 / raw.h)));
+    const scale = Math.max(1, Math.floor(Math.min(200 / raw.w, 190 / raw.h)));
+    const cx = monCanvas.width / 2;
+    const base = monCanvas.height - 12;
     mg.fillStyle = "rgba(0,0,0,0.3)";
-    mg.fillRect(100 - raw.w * scale * 0.3, 158, raw.w * scale * 0.6, 4);
-    drawMon(mg, m.id, { x: 100, y: 160 - Math.abs(Math.sin(t * 2)) * 4, scale, pose, sy: 1 + Math.sin(t * 2.4) * 0.02 });
+    mg.fillRect(cx - raw.w * scale * 0.3, base - 2, raw.w * scale * 0.6, 4);
+    drawMon(mg, m.id, { x: cx, y: base - Math.abs(Math.sin(t * 2)) * 4, scale, pose, sy: 1 + Math.sin(t * 2.4) * 0.02 });
   }
   requestAnimationFrame(animate);
 }

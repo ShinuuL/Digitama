@@ -1,11 +1,11 @@
 // Efeitos: projéteis dos ataques, explosões, notas musicais, brilhos, Zz e o
 // letreiro com o nome do golpe. Tudo pixelado e desenhado no mesmo canvas.
 import type { AttackFx } from "../shared/lore";
-import { drawGrid, pixelDisc } from "./render";
-import { HEART, NOTE_BEAMED, NOTE_EIGHTH, ZZZ } from "./sprites";
+import { ART } from "./art.gen";
+import { artFrame, drawGrid, pixelDisc } from "./render";
 
 interface Particle {
-  kind: "note" | "spark" | "bubble" | "ball" | "trail" | "boom" | "z" | "heart" | "beam" | "ring" | "bolt" | "orb";
+  kind: "note" | "spark" | "bubble" | "ball" | "fire" | "trail" | "boom" | "z" | "heart" | "beam" | "ring" | "bolt" | "orb";
   x: number;
   y: number;
   vx: number;
@@ -33,6 +33,11 @@ export class Fx {
 
   constructor(private w: number, private h: number) {}
 
+  /** Há algo se mexendo (o pet desenha mais quadros por segundo). */
+  get busy() {
+    return this.parts.length > 0 || !!this.banner || this.shake > 0 || this.flash > 0;
+  }
+
   update(dt: number) {
     const next: Particle[] = [];
     for (const p of this.parts) {
@@ -40,7 +45,8 @@ export class Fx {
       p.vy += (p.gravity ?? 0) * dt;
       p.x += p.vx * dt;
       p.y += p.vy * dt;
-      if (p.trail && Math.random() < 0.8) {
+      // ~48 faíscas de rastro por segundo, seja qual for o ritmo de desenho
+      if (p.trail && Math.random() < dt * 48) {
         next.push({ kind: "trail", x: p.x, y: p.y, vx: (Math.random() - 0.5) * 30, vy: (Math.random() - 0.5) * 30, age: 0, life: 0.35, size: p.size * 0.6, color: p.trail });
       }
       const out = p.x < -40 || p.x > this.w + 40 || p.y < -60 || p.y > this.h + 20;
@@ -66,15 +72,16 @@ export class Fx {
       g.globalAlpha = p.kind === "note" || p.kind === "z" || p.kind === "heart" ? Math.min(1, (1 - t) * 2) : 1;
       switch (p.kind) {
         case "note": {
-          const grid = p.data === 1 ? NOTE_BEAMED : NOTE_EIGHTH;
+          // quadros de art/fx/note8 e note16.aseprite (a cabeça da nota brilha)
+          const grid = artFrame(p.data === 1 ? ART.note16 : ART.note8, p.age * 1000);
           drawGrid(g, grid, p.x + Math.sin(p.age * 5) * 6, p.y, Math.max(2, P - 1), p.color);
           break;
         }
         case "heart":
-          drawGrid(g, HEART, p.x, p.y, Math.max(2, P - 1), p.color);
+          drawGrid(g, artFrame(ART.heart, p.age * 1000), p.x, p.y, Math.max(2, P - 1), p.color);
           break;
         case "z":
-          drawGrid(g, ZZZ, p.x, p.y, Math.max(2, P - 1 + Math.floor(t * 2)), "#cfe3ff");
+          drawGrid(g, ART.zzz.frames[0], p.x, p.y, Math.max(2, P - 1 + Math.floor(t * 2)), "#cfe3ff");
           break;
         case "spark":
         case "trail":
@@ -87,15 +94,27 @@ export class Fx {
           g.fillStyle = "#ffffff";
           g.fillRect(Math.round(p.x - P), Math.round(p.y - P), P, P);
           break;
+        case "fire": {
+          // art/fx/fireball.aseprite, virada para onde voa; as maiores com pixel maior
+          const fp = Math.max(1, Math.round((P * p.size) / 4));
+          const grid = artFrame(ART.fireball, p.age * 1000);
+          const w = grid[0].length * fp, h = grid.length * fp;
+          drawGrid(g, grid, p.x - w / 2, p.y - h / 2, fp, p.color, "#1a1222", p.trail ?? "#ffd23f", p.vx < 0);
+          break;
+        }
         case "ball":
         case "orb":
           pixelDisc(g, p.x, p.y, p.size, P, p.color);
           pixelDisc(g, p.x - P, p.y - P, Math.max(1, p.size * 0.45), P, "#ffffffcc");
           break;
         case "boom": {
-          const r = p.size * (0.4 + t * 1.4);
-          pixelDisc(g, p.x, p.y, r, P, t < 0.5 ? "#fff6c8" : p.color);
-          if (t > 0.3) pixelDisc(g, p.x, p.y, r * (t - 0.3) * 1.4, P, "#00000000");
+          // art/fx/boom.aseprite: clarão, estouro, bola de fogo e anel, esticados na vida da partícula
+          const total = ART.boom.ms.reduce((a, b) => a + b, 0);
+          const grid = artFrame(ART.boom, t * total, false);
+          // mesmo pixel dos outros efeitos; só as explosões enormes dobram
+          const bp = P * Math.max(1, Math.round(p.size / 14));
+          const half = (grid.length * bp) / 2;
+          drawGrid(g, grid, p.x - half, p.y - half, bp, p.color, "#1a1222", "#fff6c8");
           break;
         }
         case "beam": {
@@ -204,11 +223,11 @@ export class Fx {
         break;
       case "fireball":
       case "redfire":
-        proj({ vx: dir * 260, vy: -40, size: 4, color: kind === "fireball" ? "#ff9a1e" : "#ff4a2e", trail: "#ffd23f", boom: "#ff7a1e" });
+        proj({ kind: "fire", vx: dir * 260, vy: -40, size: 4, color: kind === "fireball" ? "#ff9a1e" : "#ff4a2e", trail: "#ffd23f", boom: "#ff7a1e" });
         break;
       case "bigfire":
       case "bigredfire":
-        proj({ vx: dir * 220, vy: -30, size: 7, color: kind === "bigfire" ? "#ff8a1e" : "#ff3a24", trail: "#ffe066", boom: "#ff5a1e", life: 1.6 });
+        proj({ kind: "fire", vx: dir * 220, vy: -30, size: 7, color: kind === "bigfire" ? "#ff8a1e" : "#ff3a24", trail: "#ffe066", boom: "#ff5a1e", life: 1.6 });
         break;
       case "missiles":
         for (let i = 0; i < 2; i++)
@@ -237,12 +256,15 @@ export class Fx {
       case "meteor":
         proj({ x: x + dir * 160, y: -30, vx: -dir * 40, vy: 260, size: 10, color: "#6a6070", trail: "#ff9a1e", boom: "#ffb040", life: 1.4 });
         break;
-      case "soul":
-        this.parts.push({ kind: "ring", x: x + dir * 60, y: y + 10, vx: 0, vy: 0, age: 0, life: 1.6, size: 60, color: "#7dff9a" });
+      case "soul": {
+        // o círculo nasce à frente, mas sempre inteiro dentro da janela
+        const cx = Math.max(70, Math.min(this.w - 70, x + dir * 60));
+        this.parts.push({ kind: "ring", x: cx, y: y + 10, vx: 0, vy: 0, age: 0, life: 1.6, size: 60, color: "#7dff9a" });
         for (let i = 0; i < 5; i++)
-          proj({ kind: "orb", x: x + dir * 60 + (i - 2) * 18, y: y - 10, vx: dir * 30, vy: -160 - i * 20, size: 3, color: "#a8ffb8", trail: "#e8fff0", life: 1.2 });
+          proj({ kind: "orb", x: cx + (i - 2) * 18, y: y - 10, vx: dir * 30, vy: -160 - i * 20, size: 3, color: "#a8ffb8", trail: "#e8fff0", life: 1.2 });
         this.flash = 0.4;
         break;
+      }
     }
     void P;
   }

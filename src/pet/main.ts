@@ -6,14 +6,14 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { api, type MediaState, type PetState, type Usage } from "../shared/api";
 import { pct, usageBlock } from "../shared/usage";
-import { LINES, STAGES, monFor, pick, stageForXp, type Mon } from "../shared/lore";
+import { LINES, STAGES, XP_STAGES, monFor, pick, stageForXp, type Mon } from "../shared/lore";
 import { setSoundEnabled, sfx } from "../shared/sound";
 import { Bubble, type Question } from "./bubble";
 import { Fx } from "./fx";
-import { drawMon, drawMonFit, drawGrid, loadPacks, monBox, monScale } from "./render";
+import { artFrame, drawMon, drawMonFit, drawGrid, drawPiece, eggPieces, loadPacks, monBox, monScale } from "./render";
 import { Ring } from "./ring";
 import { base, compose, shot, SHOT_DUR, type Base, type Shot } from "./anim";
-import { EXCLAIM } from "./sprites";
+import { ART } from "./art.gen";
 
 const W = window.innerWidth;
 const H = window.innerHeight;
@@ -62,7 +62,15 @@ interface OneShot {
   dur: number;
   fired?: boolean;
   next?: number; // estágio novo (evolução)
+  /** Etapa de rachadura já tocada (eclosão). */
+  cracked?: number;
+  /** Para onde o golpe vai (±1), decidido quando ele começa. */
+  dir?: number;
 }
+
+/** Na eclosão, quando a casca estoura (fração da animação). */
+const HATCH_BURST = 0.72;
+const CRACKS = ART["egg-crack"].frames;
 let anim: OneShot | null = null;
 
 function monId(m: Mon) {
@@ -97,11 +105,19 @@ function say(text: string, ttl?: number) {
 function play(name: OneShot["name"], dur: number, extra: Partial<OneShot> = {}) {
   const fixed = (SHOT_DUR as Record<string, number>)[name];
   anim = { name, t0: performance.now(), dur: fixed ? fixed * 1000 : dur, ...extra };
+  wake();
 }
 
 function attack(withBanner = true) {
   if (anim?.name === "evolve" || anim?.name === "hatch") return;
-  play("attack", 1500);
+  // O golpe sai na frente do corpo: perto da borda da janela, ele nasceria fora
+  // dela e sumiria (os Digimon grandes, como Gallantmon e Alphamon, quase
+  // sempre). Sem espaço à frente, vira para o lado com mais espaço.
+  const half = monBox(mon.id, scaleOf(mon.id)).w / 2;
+  const room = (d: number) => W / 2 - d * posX - half;
+  const dir = room(facing) >= 120 || room(facing) >= room(-facing) ? facing : -facing;
+  facing = dir;
+  play("attack", 1500, { dir });
   sfx.attack();
   if (withBanner && stage > 0) fx.say(mon.attack.toUpperCase() + "!", "#ffd23f");
 }
@@ -125,8 +141,8 @@ function checkEvolution() {
   const want = targetStage();
   if (want === stage || anim?.name === "evolve" || anim?.name === "hatch") return;
   if (want === 1 && stage === 0) {
+    // o som do nascimento sai quando a casca estoura (HATCH_BURST)
     play("hatch", 2600, { next: 1 });
-    sfx.hatch();
   } else {
     play("evolve", 3400, { next: want });
     sfx.evolve();
@@ -161,6 +177,7 @@ function onHook(p: HookPayload) {
   const internal = !!p.digitama_internal;
   const agent = p.digitama_agent ?? "claude";
   activity();
+  wake();
   switch (p.hook_event_name) {
     case "SessionStart":
       if (!internal) say(pick(mon.lines.greet));
@@ -422,9 +439,36 @@ function syncRegions(now: number) {
 bubble.onChange = () => {
   regionsDirty = true;
   renderMusic();
+  wake();
 };
 
 // ── Laço de desenho ──────────────────────────────────────────────────────────
+// Não desenha a cada quadro do monitor: 60–144 por segundo numa janela
+// transparente sempre por cima pesam no compositor do Windows o dia inteiro.
+// 30 fps quando algo se mexe, 12 parado (o idle do DS troca de quadro a cada
+// 150 ms), 8 dormindo. Clique, fala ou evento do agente acordam na hora.
+
+const FPS_ACTIVE = 30;
+const FPS_IDLE = 12;
+const FPS_SLEEP = 8;
+let fps = FPS_ACTIVE;
+let drawTimer = 0;
+let framePending = false;
+
+function schedule(ms: number) {
+  window.clearTimeout(drawTimer);
+  drawTimer = window.setTimeout(() => {
+    if (framePending) return;
+    framePending = true;
+    requestAnimationFrame(frame);
+  }, ms);
+}
+
+/** Desenha já no próximo quadro do monitor. */
+function wake() {
+  fps = FPS_ACTIVE;
+  schedule(0);
+}
 
 let last = performance.now();
 let nextNote = 0;
@@ -433,6 +477,8 @@ let nextZ = 0;
 /** Um erro no desenho não pode apagar o pet: registra e segue no próximo quadro. */
 let lastError = "";
 function frame(now: number) {
+  framePending = false;
+  const started = performance.now();
   try {
     frameInner(now);
   } catch (e) {
@@ -443,11 +489,13 @@ function frame(now: number) {
     }
     anim = null;
   }
-  requestAnimationFrame(frame);
+  // a espera acaba um pouco antes; o requestAnimationFrame alinha com o monitor
+  schedule(Math.max(0, 1000 / fps - (performance.now() - started) - 4));
 }
 
 function frameInner(now: number) {
-  const dt = Math.min(0.05, (now - last) / 1000);
+  // passo limitado: depois de um tempo escondido o pet não "teleporta"
+  const dt = Math.min(0.25, (now - last) / 1000);
   last = now;
   const t = now / 1000;
   if (!mon) return;
@@ -480,6 +528,8 @@ function frameInner(now: number) {
   // transformação do frame (src/pet/anim.ts)
   let white = 0, red = 0, rot = 0;
   let drawId = id;
+  let overlay: string[] | undefined;
+  let burst = -1; // progresso (0..1) da casca estourando, na eclosão
   const walking = Math.abs(targetX - posX) > 2 && !anim;
   const mode: Base = stage === 0 ? "egg"
     : sleeping ? "sleep"
@@ -522,7 +572,8 @@ function frameInner(now: number) {
         case "hurt":
         case "dizzy":
         case "alert": {
-          const dir = flip ? -1 : 1;
+          const dir = anim.dir ?? (flip ? -1 : 1);
+          flip = dir < 0; // no golpe, olha para onde ataca (mesmo dançando)
           look = compose(baseLook, shot(anim.name as Shot, p, dir));
           if (look.fire && !anim.fired && anim.name === "attack") {
             anim.fired = true;
@@ -532,14 +583,35 @@ function frameInner(now: number) {
           if (anim.name === "dizzy" && Math.random() < 0.2) fx.sparkle(W / 2 + posX, petBox[1], 1, "#ffe066");
           break;
         }
-        case "hatch":
-          rot = Math.sin(p * 40) * 0.12 * Math.min(1, p * 2);
-          white = p > 0.7 ? (p - 0.7) / 0.3 : 0;
-          if (p > 0.85) {
-            fx.flash = 0.8;
+        case "hatch": {
+          // racha em três etapas (art/fx/egg-crack.aseprite), balançando cada vez
+          // mais e brilhando; depois a casca estoura e o bebê aparece
+          if (p < HATCH_BURST) {
+            const k = p / HATCH_BURST;
+            const crack = k < 0.2 ? -1 : k < 0.5 ? 0 : k < 0.78 ? 1 : 2;
+            if (crack >= 0) overlay = CRACKS[crack];
+            if (crack > (anim.cracked ?? -1)) {
+              anim.cracked = crack;
+              sfx.poke();
+              fx.shake = Math.max(fx.shake, 0.15 + crack * 0.1);
+            }
+            rot = Math.sin(p * 40) * (0.04 + 0.12 * k);
+            white = k > 0.8 ? ((k - 0.8) / 0.2) * 0.5 : 0;
+          } else {
+            burst = (p - HATCH_BURST) / (1 - HATCH_BURST);
             drawId = monFor(state.line, anim.next ?? 1).id;
+            white = Math.max(0, 1 - burst * 1.6); // nasce em silhueta branca
+            // o bebê dá um pulinho para fora (sem o balanço do ovo)
+            look = { ...look, rot: 0, dy: look.dy - Math.sin(Math.min(1, burst * 1.4) * Math.PI) * 10 };
+            if (!anim.fired) {
+              anim.fired = true;
+              fx.flash = 0.8;
+              fx.sparkle(W / 2 + posX, GROUND - 30, 14, "#ffffff");
+              sfx.hatch();
+            }
           }
           break;
+        }
         case "evolve": {
           // pisca entre a forma atual e a nova, em silhueta branca, cada vez mais rápido
           const blink = Math.floor(p * p * 26) % 2 === 0;
@@ -571,6 +643,12 @@ function frameInner(now: number) {
   const x = W / 2 + posX + look.dx;
   const dScale = scaleOf(drawId);
   const dBox = monBox(drawId, dScale);
+  // o ovo racha quando falta pouco para chocar (art/fx/egg-crack.aseprite)
+  if (stage === 0 && !anim) {
+    const k = Math.min(1, state.xp / XP_STAGES[1]);
+    overlay = k >= 0.85 ? CRACKS[1] : k >= 0.5 ? CRACKS[0] : undefined;
+    rot *= 1 + k; // e balança mais
+  }
   g.fillStyle = "rgba(0,0,0,0.22)";
   g.fillRect(Math.round(x - dBox.w * 0.3), GROUND - 2, Math.round(dBox.w * 0.6), 4);
   petBox = drawMon(g, drawId, {
@@ -586,9 +664,18 @@ function frameInner(now: number) {
     rot,
     white,
     red,
+    overlay,
   });
+  if (burst >= 0) {
+    // a casca, com os pixels do próprio ovo: a base fica e some, a tampa voa girando
+    const { lid, base } = eggPieces(id, CRACKS[CRACKS.length - 1]);
+    const eS = scaleOf(id);
+    const dir = facing < 0 ? -1 : 1;
+    drawPiece(g, base, x, GROUND, eS, 0, 1 - burst * 1.5);
+    drawPiece(g, lid, x + dir * burst * 36, GROUND - Math.sin(Math.min(1, burst * 1.2) * Math.PI * 0.6) * 46, eS, dir * burst * 2.2, 1 - burst * 1.2, 0.5);
+  }
   if (bubble.busy && !anim) {
-    drawGrid(g, EXCLAIM, x + dBox.w * 0.3, petBox[1] - 26 + Math.sin(t * 8) * 3, 3, "#ffd23f");
+    drawGrid(g, artFrame(ART.exclaim, now), x + dBox.w * 0.3, petBox[1] - 26 + Math.sin(t * 8) * 3, 3, "#ffd23f");
   }
   fx.draw(g);
   g.restore();
@@ -606,27 +693,31 @@ function frameInner(now: number) {
   }
   syncRegions(now);
   drawUsageHud();
+  // dormindo, os Zz flutuam devagar: não precisam de 30 fps
+  fps = sleeping ? FPS_SLEEP
+    : anim || walking || music || working || bubble.busy || hover || ring.visible || fx.busy ? FPS_ACTIVE
+    : FPS_IDLE;
 }
 
 /** Medidor pequeno do uso do Claude ao passar o mouse no pet. */
 const hud = document.createElement("div");
 hud.className = "usage-hud hidden";
 document.body.appendChild(hud);
-let hudKey = "";
+let hudUsage: Usage | null = null;
 function drawUsageHud() {
   const show = hover && !!usage && pct(usage.five_hour) !== null && !bubble.visible && !ring.visible;
   hud.classList.toggle("hidden", !show);
   if (!show) return;
-  const key = JSON.stringify(usage);
-  if (key !== hudKey) {
-    hudKey = key;
+  if (usage !== hudUsage) {
+    hudUsage = usage;
     hud.replaceChildren(usageBlock(usage));
   }
   const [bx, by, bw] = petBox;
   // empilha acima da barra de música quando as duas aparecem
   const music = musicBar.classList.contains("hidden") ? null : musicBar.getBoundingClientRect();
   const bottom = music ? music.top - 6 : by - 6;
-  hud.style.left = `${Math.max(4, Math.min(W - 164, bx + bw / 2 - 80))}px`;
+  const hw = hud.offsetWidth;
+  hud.style.left = `${Math.max(4, Math.min(W - hw - 4, bx + bw / 2 - hw / 2))}px`;
   hud.style.top = `${Math.max(4, bottom - hud.offsetHeight)}px`;
 }
 
@@ -643,17 +734,26 @@ function onUsage(u: Usage) {
 
 // ── Eventos do backend ───────────────────────────────────────────────────────
 
+/** Só os sprites da linha atual: os das outras linhas ocupariam memória à toa. */
+async function reloadSprites() {
+  try {
+    await loadPacks(await api.customSprites(LINES[state.line].mons.map((m) => m.id)));
+    return true;
+  } catch {
+    return false; // sem pasta de sprites: fica o desenho em código
+  }
+}
+
 async function boot() {
   state = await api.state();
   setSoundEnabled(state.sounds);
-  try {
-    await loadPacks(await api.customSprites());
-  } catch {
-    /* sem pasta de sprites: fica o desenho em código */
-  }
+  await reloadSprites();
   setStage(targetStage());
-  requestAnimationFrame(frame);
+  wake();
   window.setTimeout(() => say(pick(mon.lines.greet)), 600);
+  // sinal de vida: se a página morrer, o app recarrega (`keep_pet_alive` no Rust)
+  void api.petAlive();
+  window.setInterval(() => void api.petAlive(), 10_000);
 
   await listen<HookPayload>("hook", (e) => onHook(e.payload));
   await listen<Usage>("usage", (e) => onUsage(e.payload));
@@ -672,31 +772,35 @@ async function boot() {
     if (now === "dance" && was !== "dance" && Math.random() < 0.5) say(pick(mon.lines.music));
     if (now) activity();
     renderMusic();
+    wake();
   });
   await listen<boolean>("pet-hover", (e) => {
     hover = e.payload;
     renderMusic();
+    wake();
   });
   await listen<string>("pet-say", (e) => say(e.payload, 6));
   // sprites baixados na primeira abertura: troca o desenho em código pelos reais
   await listen("sprites-ready", async () => {
-    try {
-      await loadPacks(await api.customSprites());
-      say("Sprites carregados!");
-    } catch {
-      /* fica o desenho em código */
-    }
+    if (await reloadSprites()) say("Sprites carregados!");
   });
   await listen("pet-attack", () => attack());
   await listen("pet-flash", () => {
     fx.flash = 0.7;
     sfx.blip();
+    wake();
+  });
+  // uma conversa do chat perguntou algo ou pediu permissão
+  await listen<string>("chat-ask", (e) => {
+    play("alert", 900);
+    sfx.ask();
+    say(`A conversa “${e.payload}” está esperando você no chat.`, 6);
   });
   await listen<boolean>("chat-busy", (e) => {
     chatBusy = e.payload;
     if (chatBusy) activity();
   });
-  await listen<PetState>("state-changed", (e) => {
+  await listen<PetState>("state-changed", async (e) => {
     const prev = state;
     // XP e contadores só crescem aqui: um eco atrasado do próprio save não os desfaz.
     state = {
@@ -710,6 +814,7 @@ async function boot() {
       setStage(targetStage());
       say("De volta ao ovo… *toc toc*");
     } else if (prev.line !== state.line) {
+      await reloadSprites();
       setStage(targetStage());
       fx.sparkle(W / 2 + posX, GROUND - 40, 16);
       say(`${LINES[state.line].title}! ${pick(mon.lines.greet)}`);

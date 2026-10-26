@@ -199,7 +199,7 @@ function draw() {
     g.setLineDash([]);
     const ratio = shot ? shot.width / W : 1;
     const label = `${Math.round(mouse.x * ratio)}, ${Math.round(mouse.y * ratio)}`;
-    g.font = "8px 'Press Start 2P'";
+    g.font = "8px Digivice, 'Press Start 2P'";
     const tw = g.measureText(label).width;
     g.fillStyle = "#0b2a7a";
     g.fillRect(mouse.x + 12, mouse.y + 12, tw + 12, 18);
@@ -477,16 +477,39 @@ async function finish(kind: "copy" | "save" | "claude") {
 }
 
 function close() {
-  void api.snipClose();
+  // A janela só se esconde até o próximo Print: para de desenhar e solta o
+  // print (um monitor 4K são ~33 MB decodificados, mais o canvas do tamanho da tela).
+  const closing = ++loopId;
+  void api.snipClose().then(() => {
+    if (closing !== loopId) return; // um Print novo já chegou
+    img = null;
+    shot = null;
+    marks = [];
+    drawing = null;
+    canvas.width = canvas.height = 0;
+  });
 }
 
 // ── Início ───────────────────────────────────────────────────────────────────
 
 let scanStart = performance.now();
-let ticking = false;
+/** O laço de desenho que vale; outro número (ou fechar) faz o antigo parar. */
+let loopId = 0;
+
+function startLoop() {
+  const id = ++loopId;
+  const tick = () => {
+    if (id !== loopId) return;
+    scanY = ((performance.now() - scanStart) / 380) * H;
+    draw();
+    requestAnimationFrame(tick);
+  };
+  requestAnimationFrame(tick);
+}
 
 /** Carrega o print novo, zera a captura anterior e pede para mostrar a janela. */
 async function load() {
+  loopId++;
   const next = await api.snipImage();
   if (!next) return; // janela pré-criada: espera a primeira captura
   const image = new Image();
@@ -510,15 +533,7 @@ async function load() {
   draw();
   await api.snipReady();
   window.focus();
-  if (!ticking) {
-    ticking = true;
-    const tick = () => {
-      scanY = ((performance.now() - scanStart) / 380) * H;
-      draw();
-      requestAnimationFrame(tick);
-    };
-    requestAnimationFrame(tick);
-  }
+  startLoop();
 }
 
 window.addEventListener("resize", () => {
@@ -528,7 +543,7 @@ window.addEventListener("resize", () => {
 });
 
 async function boot() {
-  await document.fonts.load("8px 'Press Start 2P'").catch(() => {});
+  await document.fonts.load("8px Digivice").catch(() => {});
   await listen("snip-load", () => void load());
   await load();
 }

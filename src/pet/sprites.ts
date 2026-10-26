@@ -624,29 +624,3 @@ export function sprite(id: string): Sprite {
   }
   return s;
 }
-
-// ── Notas musicais e efeitos pequenos (grades ASCII) ─────────────────────────
-
-export const NOTE_EIGHTH = [
-  "..kkk.",
-  "..kxkk",
-  "..k..k",
-  "..k...",
-  ".kk...",
-  "kxk...",
-  "kkk...",
-];
-
-export const NOTE_BEAMED = [
-  ".kkkkkk",
-  ".kxxxxk",
-  ".k....k",
-  ".k....k",
-  "kk...kk",
-  "xk..kxk",
-  "kk..kkk",
-];
-
-export const HEART = [".kk.kk.", "kxxkxxk", "kxxxxxk", ".kxxxk.", "..kxk..", "...k..."];
-export const EXCLAIM = ["kkk", "kxk", "kxk", "kxk", "kkk", "kxk", "kkk"];
-export const ZZZ = ["kkkk", "..k.", ".k..", "kkkk"];
