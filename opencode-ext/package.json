@@ -1,0 +1,119 @@
+{
+  "name": "digitama-opencode",
+  "displayName": "Digitama OpenCode",
+  "description": "Interface do OpenCode v2 no painel do VS Code: conversas, agentes, permissões, bola de contexto e pareamento (/pair).",
+  "version": "0.4.5",
+  "publisher": "mastersys",
+  "private": true,
+  "license": "UNLICENSED",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "main": "./out/extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "digitamaOpencode",
+          "title": "OpenCode",
+          "icon": "media/icone.svg"
+        }
+      ]
+    },
+    "views": {
+      "digitamaOpencode": [
+        {
+          "type": "webview",
+          "id": "digitamaOpencode.chat",
+          "name": "Conversa"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "digitamaOpencode.abrir",
+        "title": "OpenCode: Abrir conversa"
+      },
+      {
+        "command": "digitamaOpencode.nova",
+        "title": "OpenCode: Nova conversa",
+        "icon": "$(add)"
+      },
+      {
+        "command": "digitamaOpencode.agentes",
+        "title": "OpenCode: Montar agentes",
+        "icon": "$(organization)"
+      },
+      {
+        "command": "digitamaOpencode.pair",
+        "title": "OpenCode: Parear dispositivo (/pair)",
+        "icon": "$(device-mobile)"
+      },
+      {
+        "command": "digitamaOpencode.reconectar",
+        "title": "OpenCode: Reconectar ao serviço"
+      },
+      {
+        "command": "digitamaOpencode.recarregar",
+        "title": "OpenCode: Recarregar conversa e configuração",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "digitamaOpencode.config",
+        "title": "OpenCode: Configurações",
+        "icon": "$(gear)"
+      }
+    ],
+    "configuration": {
+      "title": "Digitama OpenCode",
+      "properties": {
+        "digitamaOpencode.executavel": {
+          "type": "string",
+          "default": "",
+          "description": "Caminho do opencode. Vazio = procurar no PATH e em %APPDATA%\\npm."
+        }
+      }
+    },
+    "menus": {
+      "view/title": [
+        {
+          "command": "digitamaOpencode.agentes",
+          "when": "view == digitamaOpencode.chat",
+          "group": "navigation@1"
+        },
+        {
+          "command": "digitamaOpencode.nova",
+          "when": "view == digitamaOpencode.chat",
+          "group": "navigation@2"
+        },
+        {
+          "command": "digitamaOpencode.recarregar",
+          "when": "view == digitamaOpencode.chat",
+          "group": "navigation@3"
+        },
+        {
+          "command": "digitamaOpencode.config",
+          "when": "view == digitamaOpencode.chat",
+          "group": "navigation@4"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p .",
+    "watch": "tsc -w -p .",
+    "test": "tsc -p . && node --test test/*.test.js",
+    "package": "npx @vscode/vsce package --no-dependencies"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.6.0"
+  }
+}

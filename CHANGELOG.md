@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.4.0 — 26/10/2026
+
+- **OpenCode v2:** o plugin do pet foi refeito para a v2 (`{ id, setup(ctx) }`, eventos `session.execution.*`, `session.tool.*`, `permission.asked`); a permissão clicada no balão volta por `ctx.permission.reply`. Instale de novo em Digivice → OpenCode.
+- **MCP do pet no OpenCode:** Digivice → MCP → "Registrar no OpenCode" roda `opencode mcp add --global digitama` (com confirmação), e o pet passa a valer também nas sessões do OpenCode.
+- **Extensão Digitama OpenCode** (`opencode-ext/`, instalador `.vsix` no release): interface do OpenCode v2 no VS Code.
+  - Conversas da pasta aberta (criar, retomar, excluir uma ou várias), respostas em tempo real com ferramentas e raciocínio, e o `/pair` para parear celular ou navegador.
+  - Bola de contexto e uso da cota grátis na janela de 5 h, somando todas as janelas do VS Code, o TUI e o celular. O limite é aprendido no `FreeUsageLimitError`, e a cota fica marcada como esgotada até liberar.
+  - Modos de permissão (Perguntar, Editar livre, Automático), cartões de permissão com o diff e perguntas com opções clicáveis.
+  - Menu de modelos com busca, filtro "só grátis" e seções por provedor, mostrando o que cada modelo lê (imagem, áudio, vídeo, PDF).
+  - Montador de agentes em kanban: arraste funções e modelos e grave um orquestrador com os subagentes em `.opencode/agents/`.
+  - Configurações: tema, conexões (GitHub, Cloudflare Tunnel, Docker, npm, Git e as suas, com o login no terminal) e MCPs.
+  - Comandos `/` como os do TUI, em português (`/recarregar`, `/desfazer`, `/bifurcar`…), e `!comando` no terminal.
+
 ## v0.3.0 — 26/10/2026
 
 - **Várias conversas no chat, como na extensão:** cada conversa tem o seu Claude Code, a sua pasta e o seu histórico; dá para abrir outra ou trocar enquanto uma responde. A lista mostra quem está trabalhando e quem está esperando você (o pet avisa), e as conversas abertas voltam quando o app reabre.

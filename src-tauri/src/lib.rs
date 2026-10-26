@@ -782,6 +782,31 @@ fn mcp_command(app: AppHandle) -> String {
     format!("claude {}", shown.join(" "))
 }
 
+/// O mesmo servidor MCP no OpenCode v2 (config global, `mcp.servers.digitama`).
+fn opencode_mcp_args(app: &AppHandle) -> Vec<String> {
+    let mut args: Vec<String> = vec!["mcp".into(), "add".into(), "--global".into(), "digitama".into()];
+    args.extend(mcp_args(app).into_iter().skip_while(|a| a != "--"));
+    args
+}
+
+#[tauri::command]
+fn opencode_mcp_command(app: AppHandle) -> String {
+    let shown: Vec<String> = opencode_mcp_args(&app).iter().map(|a| if a.contains(' ') { format!("\"{a}\"") } else { a.clone() }).collect();
+    format!("opencode {}", shown.join(" "))
+}
+
+#[tauri::command]
+async fn opencode_mcp_install(app: AppHandle) -> Result<String, String> {
+    let custom = app.state::<Store>().get().opencode_path;
+    let args = opencode_mcp_args(&app);
+    tauri::async_runtime::spawn_blocking(move || {
+        let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+        opencode::run(&custom, &refs)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 #[tauri::command]
 async fn mcp_install(app: AppHandle) -> Result<String, String> {
     let custom = app.state::<Store>().get().claude_path;
@@ -1120,6 +1145,8 @@ pub fn run() {
             claude_info,
             mcp_command,
             mcp_install,
+            opencode_mcp_command,
+            opencode_mcp_install,
             custom_sprites,
             usage_get,
             usage_refresh,

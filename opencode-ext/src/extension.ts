@@ -1,0 +1,614 @@
+// Host da extensão: fala com o serviço do OpenCode (opencode.ts) e repassa à
+// webview (media/main.js), que só desenha. A conversa trabalha na pasta aberta
+// no VS Code: a extensão nunca escolhe pasta sozinha.
+import * as fs from "node:fs";
+import * as path from "node:path";
+import * as vscode from "vscode";
+import { acharOpencode, contextoUsado, Modelo, Modo, Agente, naPasta, regrasDoModo, Servico, Tokens } from "./opencode";
+import { PainelAgentes } from "./painelAgentes";
+import { PainelConfig, Tema, TEMA_PADRAO } from "./painelConfig";
+import { COMANDOS, Comando, lerComando, lerShell } from "./comandos";
+import * as uso from "./uso";
+
+interface Sessao {
+  id: string;
+  title?: string;
+  agent?: string;
+  model?: { id: string; providerID: string };
+  tokens?: Tokens;
+  time?: { created: number; updated: number };
+}
+
+export function activate(ctx: vscode.ExtensionContext) {
+  const cfg = () => vscode.workspace.getConfiguration("digitamaOpencode");
+  const svc = new Servico(() => acharOpencode(cfg().get<string>("executavel", "")));
+  const prov = new Painel(ctx, svc);
+
+  const status = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 49);
+  status.command = "digitamaOpencode.abrir";
+  prov.aoContexto = (usado, limite, nome) => {
+    const pct = limite ? Math.min(100, Math.round((usado / limite) * 100)) : 0;
+    const bolas = ["○", "◔", "◑", "◕", "●"];
+    status.text = `${bolas[Math.min(4, Math.floor(pct / 25))]} ${pct}%`;
+    status.tooltip = `Contexto do OpenCode: ${usado.toLocaleString("pt-BR")} de ${limite.toLocaleString("pt-BR")} tokens${nome ? ` · ${nome}` : ""}`;
+    status.backgroundColor = pct >= 85 ? new vscode.ThemeColor("statusBarItem.warningBackground") : undefined;
+    status.show();
+  };
+
+  ctx.subscriptions.push(
+    status,
+    vscode.window.registerWebviewViewProvider("digitamaOpencode.chat", prov, { webviewOptions: { retainContextWhenHidden: true } }),
+    vscode.commands.registerCommand("digitamaOpencode.abrir", () => vscode.commands.executeCommand("digitamaOpencode.chat.focus")),
+    vscode.commands.registerCommand("digitamaOpencode.nova", () => prov.nova()),
+    vscode.commands.registerCommand("digitamaOpencode.pair", () => prov.parear()),
+    vscode.commands.registerCommand("digitamaOpencode.reconectar", () => prov.iniciar(true)),
+    vscode.commands.registerCommand("digitamaOpencode.recarregar", () => prov.comando("/recarregar")),
+    vscode.commands.registerCommand("digitamaOpencode.config", (aba?: string) => PainelConfig.abrir(ctx, svc, () => prov.temaMudou(), typeof aba === "string" ? aba : undefined)),
+    vscode.commands.registerCommand("digitamaOpencode.agentes", () => PainelAgentes.abrir(ctx, svc, () => void prov.recarregarAgentes())),
+    vscode.workspace.onDidChangeWorkspaceFolders(() => prov.iniciar(true)),
+    { dispose: () => prov.parar() },
+  );
+}
+
+export function deactivate() {}
+
+class Painel implements vscode.WebviewViewProvider {
+  private view?: vscode.WebviewView;
+  private abort?: AbortController;
+  private modelos: Modelo[] = [];
+  private agentes: Agente[] = [];
+  private comandos: { name: string; description?: string }[] = [];
+  private skills: { id: string; name: string; description?: string }[] = [];
+  /** Nome de cada provedor (id → "OpenCode", "Google"…), para agrupar o menu de modelos. */
+  private provedores: Record<string, string> = {};
+  private sessoes: Sessao[] = [];
+  private atual?: Sessao;
+  private agente = "build";
+  private modelo?: { id: string; providerID: string };
+  private usado = 0;
+  private rodando = false;
+  private conectado = false;
+  private espiando?: NodeJS.Timeout;
+  private modo: Modo;
+  /** Limites aprendidos e bloqueios: arquivo compartilhado por todas as janelas do VS Code. */
+  private uso: uso.Compartilhado = uso.vazio();
+  /** Tokens das últimas 5 h, do servidor (soma todas as janelas, TUI, celular e subagentes). */
+  private gasto: { porModelo: Record<string, number>; porCota: Record<string, number> } = { porModelo: {}, porCota: {} };
+  /** Modelo de cada sessão (inclusive subagentes), visto no início de cada passo. */
+  private modeloDaSessao = new Map<string, string>();
+  private atualizandoUso?: NodeJS.Timeout;
+  private relogioUso?: NodeJS.Timeout;
+  aoContexto: (usado: number, limite: number, nome?: string) => void = () => {};
+
+  constructor(private ctx: vscode.ExtensionContext, private svc: Servico) {
+    this.modo = ctx.globalState.get<Modo>("modo", "perguntar");
+  }
+
+  /** Roda um comando de barra vindo da paleta do VS Code. */
+  comando(texto: string) {
+    return this.enviar(texto).catch((e) => this.erro(e));
+  }
+
+  temaMudou() {
+    this.estado();
+  }
+
+  async recarregarAgentes() {
+    this.agentes = await this.svc.agentes(this.pasta()).catch(() => this.agentes);
+    this.estado();
+  }
+
+  resolveWebviewView(view: vscode.WebviewView) {
+    this.view = view;
+    const media = vscode.Uri.joinPath(this.ctx.extensionUri, "media");
+    view.webview.options = { enableScripts: true, localResourceRoots: [media] };
+    view.webview.html = this.html(view.webview, media);
+    view.webview.onDidReceiveMessage((m) => this.mensagem(m).catch((e) => this.erro(e)));
+  }
+
+  private pasta(): string | undefined {
+    return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  }
+
+  private post(m: unknown) {
+    this.view?.webview.postMessage(m);
+  }
+
+  private erro(e: unknown) {
+    this.post({ tipo: "erro", texto: e instanceof Error ? e.message : String(e) });
+  }
+
+  parar() {
+    this.abort?.abort();
+    clearInterval(this.espiando);
+    clearInterval(this.relogioUso);
+  }
+
+  async iniciar(forcar = false) {
+    if (this.abort && !forcar) return this.estado();
+    this.parar();
+    this.abort = new AbortController();
+    try {
+      await this.svc.conectar();
+      [this.modelos, this.agentes] = await Promise.all([this.svc.modelos(this.pasta()), this.svc.agentes(this.pasta())]);
+      this.comandos = ((await this.svc.req<{ data: any[] }>("GET", "/api/command" + naPasta(this.pasta())).catch(() => ({ data: [] }))).data ?? []).map((c) => ({
+        name: c.name ?? c.id,
+        description: c.description,
+      }));
+      this.provedores = Object.fromEntries(
+        ((await this.svc.req<{ data: any[] }>("GET", "/api/provider" + naPasta(this.pasta())).catch(() => ({ data: [] }))).data ?? []).map((p) => [p.id, p.name ?? p.id]),
+      );
+      this.skills = ((await this.svc.req<{ data: any[] }>("GET", "/api/skill" + naPasta(this.pasta())).catch(() => ({ data: [] }))).data ?? []).map((k) => ({
+        id: k.id,
+        name: k.name ?? k.id,
+        description: k.description,
+      }));
+      const padrao = await this.svc.req<{ data: any }>("GET", "/api/model/default").catch(() => undefined);
+      if (!this.modelo && padrao?.data) this.modelo = { id: padrao.data.id, providerID: padrao.data.providerID };
+      this.conectado = true;
+    } catch (e) {
+      this.conectado = false;
+      this.erro(e);
+    }
+    void this.svc.eventos(this.abort.signal, (e) => this.evento(e), (ok) => {
+      this.conectado = ok;
+      this.estado();
+    });
+    clearInterval(this.relogioUso);
+    this.relogioUso = setInterval(() => void this.atualizarUso(), 60_000);
+    void this.atualizarUso();
+    this.espiando = setInterval(() => {
+      if (this.rodando) void this.pendencias();
+    }, 3000);
+    await this.listar();
+  }
+
+  async listar() {
+    const pasta = this.pasta();
+    if (!pasta || !this.conectado) return this.estado();
+    const q = new URLSearchParams({ directory: pasta, order: "desc", limit: "30", parentID: "null" });
+    const j = await this.svc.req<{ data: Sessao[] }>("GET", `/api/session?${q}`).catch((e) => (this.erro(e), { data: [] }));
+    this.sessoes = j.data ?? [];
+    this.estado();
+  }
+
+  private limite(): { limite: number; nome?: string } {
+    const ref = this.atual?.model ?? this.modelo;
+    const m = this.modelos.find((x) => x.id === ref?.id && x.providerID === ref?.providerID);
+    return { limite: m?.contexto ?? 0, nome: m?.name };
+  }
+
+  private estado() {
+    const { limite, nome } = this.limite();
+    this.aoContexto(this.usado, limite, nome);
+    this.post({
+      tipo: "estado",
+      conectado: this.conectado,
+      pasta: this.pasta(),
+      sessoes: this.sessoes.map((s) => ({ id: s.id, title: s.title, updated: s.time?.updated })),
+      atual: this.atual?.id,
+      titulo: this.atual?.title,
+      agente: this.atual?.agent ?? this.agente,
+      modelo: this.atual?.model ?? this.modelo,
+      modelos: this.modelos,
+      agentes: this.agentes,
+      comandos: this.comandos,
+      locais: COMANDOS,
+      skills: this.skills,
+      provedores: this.provedores,
+      ctx: { usado: this.usado, limite },
+      rodando: this.rodando,
+      modo: this.modo,
+      tema: { ...TEMA_PADRAO, ...this.ctx.globalState.get<Partial<Tema>>("tema", {}) },
+      uso: Object.fromEntries(
+        this.modelos.map((m) => {
+          const ref = `${m.providerID}/${m.id}`;
+          const agora = Date.now();
+          // usado/limite/esgotadoAte são da cota (compartilhada entre os grátis); usadoModelo é só deste modelo
+          const cota = this.cotaDe(ref);
+          return [ref, { cota, ...uso.situacao(this.uso, cota, this.gasto.porCota[cota] ?? 0, agora), usadoModelo: this.gasto.porModelo[ref] ?? 0 }];
+        }),
+      ),
+    });
+  }
+
+  async nova() {
+    this.atual = undefined;
+    this.usado = 0;
+    this.rodando = false;
+    this.post({ tipo: "historico", mensagens: [] });
+    this.post({ tipo: "pendencias", permissoes: [], forms: [] });
+    this.estado();
+  }
+
+  private async criar(): Promise<Sessao> {
+    const pasta = this.pasta();
+    if (!pasta) throw new Error("Abra uma pasta no VS Code: a conversa trabalha nela.");
+    const j = await this.svc.req<{ data: Sessao }>("POST", "/api/session", {
+      location: { directory: pasta },
+      agent: this.agente,
+      model: this.modelo ?? null,
+      permissions: regrasDoModo(this.modo),
+    });
+    this.atual = j.data;
+    this.sessoes.unshift(j.data);
+    return j.data;
+  }
+
+  private async abrir(id: string) {
+    const s = await this.svc.req<{ data: Sessao }>("GET", `/api/session/${id}`);
+    this.atual = s.data;
+    await this.svc.req("PATCH", `/api/session/${id}`, { permissions: regrasDoModo(this.modo) }).catch(() => {});
+    await this.historico();
+    await this.pendencias();
+  }
+
+  private async historico() {
+    if (!this.atual) return;
+    const j = await this.svc.req<{ data: any[] }>("GET", `/api/session/${this.atual.id}/message?limit=200&order=desc`);
+    let msgs = (j.data ?? []).reverse();
+    // depois de um /desfazer, a sessão marca a mensagem desfeita: dali em diante some da conversa
+    const sess = await this.svc.req<{ data: Sessao & { revert?: { messageID: string } } }>("GET", `/api/session/${this.atual.id}`).catch(() => undefined);
+    if (sess?.data) this.atual = { ...this.atual, ...sess.data };
+    const corte = sess?.data?.revert ? msgs.findIndex((m) => m.id === sess.data.revert!.messageID) : -1;
+    if (corte >= 0) msgs = msgs.slice(0, corte);
+    const ultima = [...msgs].reverse().find((m) => m.type === "assistant" && m.tokens);
+    this.usado = contextoUsado(ultima?.tokens);
+    this.rodando = msgs.length > 0 && msgs[msgs.length - 1].type !== "idle" && msgs[msgs.length - 1].type !== "assistant";
+    this.post({ tipo: "historico", mensagens: msgs });
+    this.estado();
+  }
+
+  private async pendencias() {
+    if (!this.atual) return;
+    const id = this.atual.id;
+    const [p, f] = await Promise.all([
+      this.svc.req<{ data: any[] }>("GET", `/api/session/${id}/permission`).catch(() => ({ data: [] })),
+      this.svc.req<{ data: any[] }>("GET", `/api/session/${id}/form`).catch(() => ({ data: [] })),
+    ]);
+    if (this.atual?.id === id) this.post({ tipo: "pendencias", permissoes: p.data ?? [], forms: f.data ?? [] });
+  }
+
+  /** Os modelos grátis de um provedor dividem a mesma cota; um pago tem a sua. */
+  private cotaDe(ref: string): string {
+    const m = this.modelos.find((x) => `${x.providerID}/${x.id}` === ref);
+    return m?.gratis ? `${m.providerID}:gratis` : ref;
+  }
+
+  private arquivoUso() {
+    return path.join(this.ctx.globalStorageUri.fsPath, "uso.json");
+  }
+
+  /** Lê o arquivo compartilhado e junta com o desta janela (outra janela pode ter aprendido algo). */
+  private lerUso() {
+    try {
+      const outro = JSON.parse(fs.readFileSync(this.arquivoUso(), "utf8"));
+      this.uso = uso.mesclar(this.uso, outro, Date.now());
+    } catch {}
+  }
+
+  private gravarUso() {
+    this.lerUso(); // relê antes: nunca apaga o que outra janela gravou
+    try {
+      fs.mkdirSync(path.dirname(this.arquivoUso()), { recursive: true });
+      fs.writeFileSync(this.arquivoUso(), JSON.stringify(this.uso), "utf8");
+    } catch {}
+  }
+
+  /** Busca no servidor os tokens das últimas 5 h (todas as sessões, de todas as janelas). */
+  private async atualizarUso() {
+    this.lerUso();
+    const de = Date.now() - uso.JANELA_MS;
+    const j = await this.svc.req<{ data: any }>("GET", `/api/experimental/session/stats?from=${de}&tools=none`).catch(() => undefined);
+    if (j?.data) this.gasto = uso.somar(j.data.models ?? [], (ref) => this.cotaDe(ref));
+    this.estado();
+  }
+
+  /** Depois de cada resposta, em qualquer sessão: atualiza logo (agrupado). */
+  private usoEmBreve() {
+    clearTimeout(this.atualizandoUso);
+    this.atualizandoUso = setTimeout(() => void this.atualizarUso(), 1500);
+  }
+
+  /** Percebe a recusa por cota em qualquer sessão (FreeUsageLimitError e afins). */
+  private contarUso(t: string, d: any) {
+    const sid = d?.sessionID;
+    if (!sid) return;
+    if (t === "session.step.started" && d.model) this.modeloDaSessao.set(sid, `${d.model.providerID}/${d.model.id}`);
+    if (t === "session.step.ended" || t.startsWith("session.execution.")) this.usoEmBreve();
+    if (!/fail|retry|error/.test(t)) return;
+    const err = d.error?.error ?? d.error ?? {};
+    const msg = typeof err === "string" ? err : err.message ?? d.message;
+    if (!uso.erroDeLimite(msg, err.status, err.type ?? err._tag) && !/FreeUsageLimitError/.test(JSON.stringify(d))) return;
+    const mAtual = this.atual?.id === sid ? this.atual?.model : undefined;
+    const ref = this.modeloDaSessao.get(sid) ?? (mAtual ? `${mAtual.providerID}/${mAtual.id}` : undefined);
+    if (!ref) return;
+    void this.registrarLimite(ref);
+  }
+
+  private async registrarLimite(ref: string) {
+    const cota = this.cotaDe(ref);
+    if ((this.uso.bloqueios[cota] ?? 0) > Date.now()) return this.avisarLimite(ref); // outra janela já marcou
+    await this.atualizarUso();
+    const agora = Date.now();
+    // quando a cota libera: 5 h depois do primeiro uso que ainda está na janela
+    const temPassos = async (de: number, ate: number) => {
+      const j = await this.svc.req<{ data: any }>("GET", `/api/experimental/session/stats?from=${de}&to=${ate}&tools=none`).catch(() => undefined);
+      return (j?.data?.models ?? []).some((m: any) => this.cotaDe(`${m.model.providerID}/${m.model.id}`) === cota && m.steps > 0);
+    };
+    const primeiro = await uso.primeiroUso(temPassos, agora).catch(() => undefined);
+    uso.marcarLimite(this.uso, cota, this.gasto.porCota[cota] ?? 0, (primeiro ?? agora) + uso.JANELA_MS);
+    this.gravarUso();
+    this.estado();
+    this.avisarLimite(ref);
+  }
+
+  private avisarLimite(ref: string) {
+    const cota = this.cotaDe(ref);
+    const ate = this.uso.bloqueios[cota] ?? Date.now() + uso.JANELA_MS;
+    const nome = this.modelos.find((m) => `${m.providerID}/${m.id}` === ref)?.name ?? ref;
+    const hora = new Date(ate).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
+    const lim = this.uso.limites[cota];
+    const compartilhada = cota !== ref;
+    this.post({
+      tipo: "aviso",
+      nivel: "erro",
+      texto: compartilhada
+        ? `A cota grátis acabou (${nome} recusou${lim ? `, ~${lim.toLocaleString("pt-BR")} tokens em 5 h` : ""}). Ela vale para todos os modelos grátis deste provedor, em todas as janelas: trocar para outro grátis não resolve. Libera por volta das ${hora}; até lá, use um modelo pago ou de outro provedor.`
+        : `${nome} chegou no limite da janela de 5 h${lim ? ` (~${lim.toLocaleString("pt-BR")} tokens)` : ""}. Libera por volta das ${hora}. Troque de modelo para continuar.`,
+      acao: { rotulo: "Trocar modelo", menu: "modelo" },
+    });
+  }
+
+  private evento(e: any) {
+    const t: string = e.type ?? "";
+    const sid = e.data?.sessionID;
+    this.contarUso(t, e.data);
+    if (/permission|form/.test(t)) void this.pendencias();
+    if (!this.atual || sid !== this.atual.id) {
+      if (t.startsWith("session.") && sid && this.sessoes.some((s) => s.id === sid) && t === "session.execution.succeeded") void this.listar();
+      return;
+    }
+    if (t === "session.execution.started") this.rodando = true;
+    if (t === "session.step.ended") this.usado = contextoUsado(e.data.tokens);
+    if (t === "session.step.started" && e.data.model) this.atual.model = e.data.model;
+    if (t.startsWith("session.execution.") && t !== "session.execution.started") {
+      this.rodando = false;
+      void this.historico().then(() => this.listar());
+      void this.pendencias();
+    }
+    this.post({ tipo: "evento", e });
+    if (/^session\.(execution|step\.(started|ended))/.test(t)) this.estado();
+  }
+
+  async parear() {
+    try {
+      if (!this.svc.base) await this.svc.conectar();
+      const { code, expires_in } = await this.svc.codigo();
+      const url = `${this.svc.base}/auth/connect/${code}`;
+      this.post({ tipo: "pair", url, expira: Date.now() + expires_in * 1000 });
+      await vscode.commands.executeCommand("digitamaOpencode.chat.focus");
+    } catch (e) {
+      this.erro(e);
+    }
+  }
+
+  private async mensagem(m: any): Promise<unknown> {
+    switch (m.tipo) {
+      case "pronto":
+        return this.iniciar();
+      case "reconectar":
+        return this.iniciar(true);
+      case "nova":
+        return this.nova();
+      case "excluir": {
+        // só chega aqui depois da confirmação no próprio menu (não tem volta)
+        const ids: string[] = (m.ids ?? []).filter((id: unknown) => typeof id === "string" && /^ses/.test(id));
+        const falhas: string[] = [];
+        for (const id of ids) await this.svc.req("DELETE", `/api/session/${id}`).catch(() => falhas.push(id));
+        if (this.atual && ids.includes(this.atual.id) && !falhas.includes(this.atual.id)) await this.nova();
+        await this.listar();
+        const ok = ids.length - falhas.length;
+        return this.avisar(falhas.length ? `${ok} excluída(s); ${falhas.length} falharam.` : `${ok} conversa(s) excluída(s).`, falhas.length ? "info" : "ok");
+      }
+      case "abrir":
+        return this.abrir(m.id);
+      case "pair":
+        return this.parear();
+      case "copiar":
+        await vscode.env.clipboard.writeText(m.texto);
+        return vscode.window.setStatusBarMessage("Link copiado.", 2000);
+      case "navegador":
+        return vscode.env.openExternal(vscode.Uri.parse(m.url));
+      case "agente":
+        this.agente = m.id;
+        {
+          // agente com modelo próprio (ex.: montado no painel) leva o modelo junto
+          const proprio = this.agentes.find((a) => a.id === m.id)?.model;
+          if (proprio) this.modelo = { id: proprio.id, providerID: proprio.providerID };
+        }
+        if (this.atual) {
+          await this.svc.req("POST", `/api/session/${this.atual.id}/agent`, { agent: m.id });
+          this.atual.agent = m.id;
+          if (this.modelo) {
+            await this.svc.req("POST", `/api/session/${this.atual.id}/model`, { model: this.modelo });
+            this.atual.model = this.modelo;
+          }
+        }
+        return this.estado();
+      case "modelo":
+        this.modelo = { id: m.id, providerID: m.providerID };
+        if (this.atual) {
+          await this.svc.req("POST", `/api/session/${this.atual.id}/model`, { model: this.modelo });
+          this.atual.model = this.modelo;
+        }
+        return this.estado();
+      case "modo":
+        this.modo = m.modo;
+        await this.ctx.globalState.update("modo", m.modo);
+        if (this.atual) await this.svc.req("PATCH", `/api/session/${this.atual.id}`, { permissions: regrasDoModo(this.modo) });
+        return this.estado();
+      case "agentes":
+        return vscode.commands.executeCommand("digitamaOpencode.agentes");
+      case "config":
+        return vscode.commands.executeCommand("digitamaOpencode.config", m.aba);
+      case "enviar":
+        return this.enviar(String(m.texto ?? ""));
+      case "interromper":
+        if (this.atual) await this.svc.req("POST", `/api/session/${this.atual.id}/interrupt`, {});
+        return;
+      case "compactar":
+        if (this.atual) await this.svc.req("POST", `/api/session/${this.atual.id}/compact`, {});
+        return;
+      case "permissao":
+        if (!this.atual) return;
+        await this.svc.req("POST", `/api/session/${this.atual.id}/permission/${m.id}/reply`, { decision: m.decisao });
+        return this.pendencias();
+      case "form":
+        if (!this.atual) return;
+        await this.svc.req("POST", `/api/session/${this.atual.id}/form/${m.id}/reply`, { answer: m.answer });
+        return this.pendencias();
+      case "formCancelar":
+        if (!this.atual) return;
+        await this.svc.req("DELETE", `/api/session/${this.atual.id}/form/${m.id}`);
+        return this.pendencias();
+    }
+  }
+
+  private async enviar(texto: string): Promise<unknown> {
+    texto = texto.trim();
+    if (!texto) return;
+    const local = lerComando(texto);
+    if (local) return this.executar(local.cmd, local.args);
+    const s = this.atual ?? (await this.criar());
+    const shell = lerShell(texto);
+    this.rodando = true;
+    this.estado();
+    if (shell) {
+      await this.svc.req("POST", `/api/session/${s.id}/shell`, { command: shell });
+      return;
+    }
+    const cmd = texto.match(/^\/(\S+)\s*([\s\S]*)$/);
+    if (cmd && this.comandos.some((c) => c.name === cmd[1])) {
+      await this.svc.req("POST", `/api/session/${s.id}/command`, { name: cmd[1], text: cmd[2] });
+    } else {
+      const r = await this.svc.req<{ data: any }>("POST", `/api/session/${s.id}/prompt`, { text: texto });
+      this.post({ tipo: "eco", mensagem: { id: r.data?.id, type: "user", text: texto } });
+    }
+  }
+
+  private avisar(texto: string, nivel: "ok" | "info" = "info") {
+    this.post({ tipo: "aviso", texto, nivel });
+  }
+
+  /** Comandos de barra locais (src/comandos.ts). */
+  private async executar(cmd: Comando, args: string): Promise<unknown> {
+    const s = this.atual;
+    if (cmd.sessao && !s) return this.avisar(`/${cmd.nome} precisa de uma conversa aberta.`);
+    const base = s ? `/api/session/${s.id}` : "";
+    switch (cmd.nome) {
+      case "recarregar": {
+        const pasta = this.pasta();
+        if (pasta) await this.svc.req("POST", "/api/location/reload" + naPasta(pasta), {}).catch(() => {});
+        await this.iniciar(true);
+        if (s) await this.abrir(s.id);
+        return this.avisar("Recarregado: conversa, agentes, modelos e comandos.", "ok");
+      }
+      case "nova":
+        return this.nova();
+      case "sessoes":
+        return this.post({ tipo: "menu", qual: "sessao" });
+      case "parar":
+        await this.svc.req("POST", `${base}/interrupt`, {});
+        return;
+      case "compactar":
+        await this.svc.req("POST", `${base}/compact`, {});
+        return this.avisar("Compactando a conversa…");
+      case "desfazer": {
+        const j = await this.svc.req<{ data: any[] }>("GET", `${base}/message?limit=200&order=desc`);
+        const ultima = (j.data ?? []).find((m) => m.type === "user");
+        if (!ultima) return this.avisar("Nada para desfazer.");
+        await this.svc.req("POST", `${base}/revert/stage`, { messageID: ultima.id, files: true });
+        await this.historico();
+        return this.avisar("Última mensagem desfeita (arquivos também). Use /refazer para voltar.", "ok");
+      }
+      case "refazer":
+        await this.svc.req("DELETE", `${base}/revert`);
+        await this.historico();
+        return this.avisar("Refeito.", "ok");
+      case "bifurcar": {
+        const j = await this.svc.req<{ data: Sessao }>("POST", `${base}/fork`, {});
+        await this.listar();
+        await this.abrir(j.data.id);
+        return this.avisar("Conversa copiada. Você está na cópia.", "ok");
+      }
+      case "renomear":
+        if (!args) return this.avisar("Use: /renomear <título>");
+        await this.svc.req("PATCH", base, { title: args });
+        s!.title = args;
+        await this.listar();
+        return this.avisar("Conversa renomeada.", "ok");
+      case "arquivar":
+        await this.svc.req("PATCH", base, { archived: true });
+        await this.nova();
+        await this.listar();
+        return this.avisar("Conversa arquivada.", "ok");
+      case "exportar": {
+        const j = await this.svc.req("GET", `/api/experimental/session/${s!.id}/export`);
+        const doc = await vscode.workspace.openTextDocument({ language: "json", content: JSON.stringify(j, null, 2) });
+        await vscode.window.showTextDocument(doc, { preview: false });
+        return;
+      }
+      case "modelos":
+        return this.post({ tipo: "menu", qual: "modelo" });
+      case "agentes":
+        return this.post({ tipo: "menu", qual: "agente" });
+      case "montar":
+        return vscode.commands.executeCommand("digitamaOpencode.agentes");
+      case "modo": {
+        const modo = ({ perguntar: "perguntar", ask: "perguntar", edicoes: "edicoes", edits: "edicoes", auto: "auto" } as Record<string, Modo>)[args.toLowerCase()];
+        if (!modo) return this.avisar("Use: /modo perguntar | edicoes | auto");
+        return this.mensagem({ tipo: "modo", modo });
+      }
+      case "skill": {
+        const [id, ...resto] = args.split(/\s+/);
+        if (!id || !this.skills.some((k) => k.id === id)) return this.avisar(`Skills: ${this.skills.map((k) => k.id).join(", ") || "nenhuma"}`);
+        const sess = this.atual ?? (await this.criar());
+        const textoSkill = resto.join(" ") || `Use a skill ${id}.`;
+        this.rodando = true;
+        this.estado();
+        const r = await this.svc.req<{ data: any }>("POST", `/api/session/${sess.id}/prompt`, { text: textoSkill, skills: [{ id }] });
+        this.post({ tipo: "eco", mensagem: { id: r.data?.id, type: "user", text: `[${id}] ${textoSkill}` } });
+        return;
+      }
+      case "mcp": {
+        const j = await this.svc.req<{ data: any[] }>("GET", "/api/mcp" + naPasta(this.pasta()));
+        const nomes: Record<string, string> = { connected: "conectado", pending: "conectando", disabled: "desligado", failed: "falhou", needs_auth: "precisa de login" };
+        const l = (j.data ?? []).map((m) => `${m.name ?? m.id}: ${nomes[m.status?.status] ?? m.status?.status ?? "?"}`);
+        return this.avisar(l.length ? "MCP — " + l.join(" · ") : "Nenhum servidor MCP configurado. Adicione em Configurações → MCPs (o do pet Digitama entra com um clique).");
+      }
+      case "status": {
+        const info = await this.svc.req<any>("GET", "/api/info").catch(() => ({}));
+        const { limite, nome } = this.limite();
+        return this.avisar(`OpenCode ${info.version ?? "?"} em ${this.svc.base} · ${nome ?? "modelo padrão"} · contexto ${this.usado.toLocaleString("pt-BR")}/${limite.toLocaleString("pt-BR")} · modo ${this.modo}`);
+      }
+      case "pair":
+        return this.parear();
+      case "config":
+        return vscode.commands.executeCommand("digitamaOpencode.config");
+      case "ajuda":
+        return this.post({ tipo: "ajuda" });
+    }
+  }
+
+  private html(w: vscode.Webview, media: vscode.Uri) {
+    const nonce = Math.random().toString(36).slice(2) + Date.now().toString(36);
+    const css = w.asWebviewUri(vscode.Uri.joinPath(media, "main.css"));
+    const js = w.asWebviewUri(vscode.Uri.joinPath(media, "main.js"));
+    const icones = w.asWebviewUri(vscode.Uri.joinPath(media, "icones.js"));
+    return `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${w.cspSource}; script-src 'nonce-${nonce}'; img-src ${w.cspSource} data:;">
+<meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="${css}"></head>
+<body><div id="app"></div><script nonce="${nonce}" src="${icones}"></script><script nonce="${nonce}" src="${js}"></script></body></html>`;
+  }
+}

@@ -184,6 +184,12 @@ $("#pages").innerHTML = `
     <div class="row"><button class="dv-btn" id="mcpcopy">Copiar comando</button><button class="dv-btn go" id="mcpinstall">Registrar agora</button></div>
     <p id="mcpout" class="muted"></p>
   </div>
+  <div class="dv-panel">
+    <p>O mesmo servidor no OpenCode v2 (config global, <code>mcp.servers.digitama</code>).</p>
+    <pre id="ocmcpcmd"></pre>
+    <div class="row"><button class="dv-btn" id="ocmcpcopy">Copiar comando</button><button class="dv-btn go" id="ocmcpinstall">Registrar no OpenCode</button></div>
+    <p id="ocmcpout" class="muted"></p>
+  </div>
 </section>
 
 <section data-page="snip">
@@ -559,6 +565,15 @@ $("#mcpinstall").onclick = async () => {
     $("#mcpout").textContent = `Falhou: ${e}`;
   }
 };
+$("#ocmcpcopy").onclick = () => void navigator.clipboard.writeText($("#ocmcpcmd").textContent ?? "");
+$("#ocmcpinstall").onclick = async () => {
+  if (!confirm(`Rodar este comando?\n\n${$("#ocmcpcmd").textContent}\n\nEle adiciona o servidor "digitama" à configuração global do OpenCode.`)) return;
+  try {
+    $("#ocmcpout").textContent = (await api.opencodeMcpInstall()) || "Registrado.";
+  } catch (e) {
+    $("#ocmcpout").textContent = `Falhou: ${e}`;
+  }
+};
 
 // ── O Digimon animado no centro do Digivice ──────────────────────────────────
 
@@ -631,6 +646,7 @@ async function boot() {
     void refreshSprites();
   });
   $("#mcpcmd").textContent = await api.mcpCommand();
+  $("#ocmcpcmd").textContent = await api.opencodeMcpCommand();
   await listen<PetState>("state-changed", (e) => {
     state = e.payload;
     render();

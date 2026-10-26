@@ -178,6 +178,8 @@ export const api = {
   claudeInfo: () => invoke<{ path: string | null; version: string | null }>("claude_info"),
   mcpCommand: () => invoke<string>("mcp_command"),
   mcpInstall: () => invoke<string>("mcp_install"),
+  opencodeMcpCommand: () => invoke<string>("opencode_mcp_command"),
+  opencodeMcpInstall: () => invoke<string>("opencode_mcp_install"),
   /** Sem `ids`, todos os sprites; com, só os desses Digimon. */
   customSprites: (ids?: string[]) => invoke<Record<string, string>>("custom_sprites", { ids: ids ?? null }),
   petAlive: () => invoke("pet_alive").catch(() => {}),
