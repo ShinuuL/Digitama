@@ -2,7 +2,7 @@
 
 Pet de área de trabalho (Tauri 2, qualquer PC Windows 10/11) que reage ao Claude Code (hooks) e ao OpenCode (plugin). Visão geral, uso e arquitetura no [README.md](README.md).
 
-A extensão do VS Code fica em `vscode-ext/` (Digimon Pendulum Ver.1.0, regras em `src/game.ts`, animação em `media/main.js`; `npm test` lá dentro). Para animação de sprites, veja a skill `sprite-motion`.
+A extensão do VS Code (Digimon Pendulum Ver.1.0) mudou para o projeto `C:DEVDevPendulumscode-ext`, fora deste repositório. Para animação de sprites, veja a skill `sprite-motion` (`.claude/skills/`).
 
 ## Build e testes
 ```
