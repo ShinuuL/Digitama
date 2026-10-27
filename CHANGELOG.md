@@ -1,5 +1,11 @@
 # Changelog
 
+## Extensão Digitama OpenCode 0.5.6 — 27/10/2026
+
+- **Google Cloud e Firebase nas Conexões:** cartões prontos com estado ao vivo. O Google Cloud mostra a conta ativa e o projeto (`gcloud config get-value project`); o Firebase mostra a conta do `firebase-tools`. "Conectar" roda `gcloud auth login` / `firebase login` no terminal do VS Code; "Instalar" sugere `winget install --id Google.CloudSDK` / `npm i -g firebase-tools`.
+- **Logado só com conta impressa:** as duas CLIs saem com código 0 mesmo deslogadas, então o estado vem do e-mail na saída, não do código de saída.
+- **Atenção:** com a conta logada, o agente pode rodar `gcloud` e `firebase` em seu nome. Em projetos com dados de clientes, mantenha o modo "perguntar".
+
 ## Extensão Digitama OpenCode 0.5.5 — 27/10/2026
 
 - **Horário de volta vindo do servidor:** a recusa `provider.free-limit` traz `retryAfterMs` (cabeçalho `retry-after`). Recusa + `retryAfterMs` é o horário exato em que a cota libera — duas recusas reais com 8 min de diferença apontaram para o mesmo instante. A pílula mostra "esgotado até 14:39"; sem o campo, estima 5 h e mostra "~14:39".

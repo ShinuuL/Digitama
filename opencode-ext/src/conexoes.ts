@@ -32,6 +32,8 @@ export const PADRAO: Conexao[] = [
   { id: "github", nome: "GitHub", icone: "github", descricao: "Conta do gh: PRs, issues e push pelo OpenCode.", status: "gh auth status", login: "gh auth login --web", logout: "gh auth logout", instalar: "winget install --id GitHub.cli" },
   { id: "cloudflared", nome: "Cloudflare Tunnel", icone: "globe", descricao: "Túneis do cloudflared (expor o /pair ou um serviço com segurança).", status: "cloudflared --version", login: "cloudflared tunnel login", instalar: "winget install --id Cloudflare.cloudflared" },
   { id: "docker", nome: "Docker", icone: "box", descricao: "Docker Engine e login no registro.", status: "docker info --format \"{{.ServerVersion}}\"", login: "docker login", logout: "docker logout", instalar: "winget install --id Docker.DockerDesktop" },
+  { id: "gcloud", nome: "Google Cloud", icone: "cloud", descricao: "Conta e projeto ativo do gcloud. Credenciais para SDKs e código local: gcloud auth application-default login.", status: "gcloud auth list --filter=status:ACTIVE --format=\"value(account)\"", login: "gcloud auth login", logout: "gcloud auth revoke", instalar: "winget install --id Google.CloudSDK" },
+  { id: "firebase", nome: "Firebase", icone: "flame", descricao: "Conta do firebase-tools: deploy, emuladores e regras.", status: "firebase login:list", login: "firebase login", logout: "firebase logout", instalar: "npm i -g firebase-tools" },
   { id: "npm", nome: "npm", icone: "box", descricao: "Conta do registro npm.", status: "npm whoami", login: "npm login", logout: "npm logout" },
   { id: "git", nome: "Git (identidade)", icone: "pencil", descricao: "Nome e e-mail usados nos commits.", status: "git config --global user.name" },
 ];
@@ -57,6 +59,11 @@ function rodar(cmd: string, ms = 15_000): Promise<{ ok: boolean; saida: string; 
 /** 9009 = "não é reconhecido" no cmd do Windows; 127 = command not found no sh. */
 const naoExiste = (r: { codigo: number; saida: string }) => r.codigo === 9009 || r.codigo === 127 || /not recognized|reconhecido como|command not found|ENOENT/i.test(r.saida);
 
+/** Contas na saída (gcloud/firebase saem com código 0 mesmo deslogados: vale o e-mail impresso). */
+export function contasDe(saida: string): string[] {
+  return [...new Set(saida.match(/[\w.+-]+@[\w-]+(?:\.[\w-]+)+/g) ?? [])];
+}
+
 /** Interpreta a saída de cada conexão conhecida; as personalizadas valem pelo código de saída. */
 export async function checar(c: Conexao): Promise<Estado> {
   const r = await rodar(c.status);
@@ -81,6 +88,17 @@ export async function checar(c: Conexao): Promise<Estado> {
       return r.ok
         ? { instalado: true, logado: true, detalhe: `engine ${r.saida.split("\n")[0]} rodando` }
         : { instalado: true, logado: false, detalhe: /daemon|pipe|connect/i.test(r.saida) ? "Docker Desktop parado" : r.saida.split("\n")[0].slice(0, 120) };
+    case "gcloud": {
+      const contas = contasDe(r.saida);
+      if (!contas.length) return { instalado: true, logado: false, detalhe: "não logado" };
+      const p = await rodar("gcloud config get-value project");
+      const projeto = p.ok ? p.saida.split("\n").find((l) => l && !/^\(unset\)$|WARNING|^Your active/i.test(l.trim()))?.trim() : undefined;
+      return { instalado: true, logado: true, detalhe: `${contas.join(", ")} · ${projeto ? "projeto " + projeto : "sem projeto ativo"}` };
+    }
+    case "firebase": {
+      const contas = contasDe(r.saida);
+      return { instalado: true, logado: contas.length > 0, detalhe: contas.length ? contas.join(", ") : "não logado" };
+    }
     case "npm":
       return r.ok ? { instalado: true, logado: true, detalhe: r.saida.split("\n")[0] } : { instalado: true, logado: false, detalhe: "não logado" };
     case "git": {
