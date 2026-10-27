@@ -12,6 +12,7 @@ import { COMANDOS, Comando, lerComando, lerShell } from "./comandos";
 import * as uso from "./uso";
 import { Anexo, classificar, comCaminhos } from "./anexos";
 import { Atualizador } from "./atualizador";
+import { DetectorRepeticao, REPETICOES_ATE_PARAR } from "./repeticao";
 
 interface Sessao {
   id: string;
@@ -110,6 +111,8 @@ class Painel implements vscode.WebviewViewProvider {
   private gasto: { porModelo: Record<string, number>; porCota: Record<string, number> } = { porModelo: {}, porCota: {} };
   /** Modelo de cada sessão (inclusive subagentes), visto no início de cada passo. */
   private modeloDaSessao = new Map<string, string>();
+  /** Para de executar quando o agente repete a mesma chamada várias vezes. */
+  private repeticao = new DetectorRepeticao((sid, ferramenta) => void this.interromperRepeticao(sid, ferramenta));
   private atualizandoUso?: NodeJS.Timeout;
   private relogioUso?: NodeJS.Timeout;
   aoContexto: (usado: number, limite: number, nome?: string) => void = () => {};
@@ -128,7 +131,13 @@ class Painel implements vscode.WebviewViewProvider {
   }
 
   async recarregarAgentes() {
-    this.agentes = await this.svc.agentes(this.pasta()).catch(() => this.agentes);
+    try {
+      this.agentes = await this.svc.agentes(this.pasta());
+    } catch (e) {
+      // Antes o erro era engolido e a lista velha ficava para sempre, sem aviso:
+      // era isso que escondia um agente global recém-criado.
+      this.avisar(`Não consegui recarregar os agentes: ${e instanceof Error ? e.message : String(e)}`);
+    }
     this.estado();
   }
 
@@ -164,7 +173,15 @@ class Painel implements vscode.WebviewViewProvider {
     this.abort = new AbortController();
     try {
       await this.svc.conectar();
-      [this.modelos, this.agentes] = await Promise.all([this.svc.modelos(this.pasta()), this.svc.agentes(this.pasta())]);
+      [this.modelos, this.agentes] = await Promise.all([
+        this.svc.modelos(this.pasta()),
+        // Uma falha só nos agentes não derruba a conexão inteira: mantém a lista
+        // anterior e avisa, em vez de deixar o menu preso nos agentes embutidos.
+        this.svc.agentes(this.pasta()).catch((e) => {
+          this.avisar(`Não consegui listar os agentes: ${e instanceof Error ? e.message : String(e)}. Mantive a lista anterior.`);
+          return this.agentes;
+        }),
+      ]);
       this.comandos = ((await this.svc.req<{ data: any[] }>("GET", "/api/command" + naPasta(this.pasta())).catch(() => ({ data: [] }))).data ?? []).map((c) => ({
         name: c.name ?? c.id,
         description: c.description,
@@ -185,7 +202,11 @@ class Painel implements vscode.WebviewViewProvider {
       this.erro(e);
     }
     void this.svc.eventos(this.abort.signal, (e) => this.evento(e), (ok) => {
+      const reconectou = ok && !this.conectado;
       this.conectado = ok;
+      // o serviço pode ter subido com outra configuração (um agente global novo,
+      // por exemplo): ao reconectar, relê a lista em vez de ficar com a antiga.
+      if (reconectou) void this.recarregarAgentes();
       this.estado();
     });
     clearInterval(this.relogioUso);
@@ -360,6 +381,33 @@ class Painel implements vscode.WebviewViewProvider {
     void this.registrarLimite(ref);
   }
 
+  /** Conta chamadas de ferramenta para perceber o agente repetindo os mesmos passos. */
+  private vigiarRepeticao(t: string, d: any) {
+    const sid = d?.sessionID;
+    if (!sid) return;
+    // Cada execução nova (o usuário mandou outra mensagem) recomeça a contagem.
+    if (t === "session.execution.started") return this.repeticao.zerar(sid);
+    if (t !== "session.tool.called") return;
+    this.repeticao.ferramenta(sid, d.name, d.input);
+  }
+
+  /** O agente repetiu a mesma chamada: interrompe e explica, em vez de deixar rodando. */
+  private async interromperRepeticao(sid: string, ferramenta: string) {
+    const nome = ferramenta || "ferramenta";
+    try {
+      await this.svc.req("POST", `/api/session/${sid}/interrupt`, {});
+    } catch (e) {
+      // Se nem interromper deu certo, o aviso abaixo ainda explica o que houve.
+      this.avisar(`Não consegui interromper a repetição: ${e instanceof Error ? e.message : String(e)}`);
+      return;
+    }
+    this.post({
+      tipo: "aviso",
+      nivel: "erro",
+      texto: `Parei: o agente repetiu "${nome}" ${REPETICOES_ATE_PARAR + 1} vezes seguidas com a mesma entrada. Isso é loop — reformule o pedido ou dê mais contexto.`,
+    });
+  }
+
   private async registrarLimite(ref: string) {
     const cota = this.cotaDe(ref);
     if ((this.uso.bloqueios[cota] ?? 0) > Date.now()) return this.avisarLimite(ref); // outra janela já marcou
@@ -398,6 +446,7 @@ class Painel implements vscode.WebviewViewProvider {
     const t: string = e.type ?? "";
     const sid = e.data?.sessionID;
     this.contarUso(t, e.data);
+    this.vigiarRepeticao(t, e.data);
     if (/permission|form/.test(t)) void this.pendencias();
     if (!this.atual || sid !== this.atual.id) {
       if (t.startsWith("session.") && sid && this.sessoes.some((s) => s.id === sid) && t === "session.execution.succeeded") void this.listar();

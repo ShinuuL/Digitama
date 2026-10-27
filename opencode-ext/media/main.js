@@ -533,8 +533,40 @@
       el.append(h("pre", {}, saida.length > 4000 ? saida.slice(0, 4000) + "\n…" : saida));
     }
   }
-  function pensaEl(txt, aberto) {
-    return h("details", { class: "pensa", open: aberto }, h("summary", {}, I("brain", 12), "Raciocínio"), h("div", { class: "corpo" }, txt || ""));
+  // Raciocínio: fechado por padrão e SEM despejar texto na tela enquanto o modelo
+  // pensa. Rodando, o cabeçalho vira um indicador animado (ondas + pulso); o texto
+  // só entra no DOM quando o usuário abre o bloco ou quando o raciocínio termina.
+  function escreverPensa(el) {
+    if (el._corpo.textContent !== el._txt) el._corpo.textContent = el._txt || "";
+  }
+  function pensaEl(txt, corrida) {
+    const rotulo = h("span", { class: "rotulo" }, corrida ? "Raciocinando" : "Raciocínio");
+    const corpo = h("div", { class: "corpo" });
+    const ondas = h("span", { class: "ondas", "aria-hidden": "true" }, h("i"), h("i"), h("i"));
+    const el = h("details", { class: "pensa" },
+      h("summary", {}, I("brain", 12), rotulo, corrida ? ondas : null),
+      corpo);
+    el._txt = txt || "";
+    el._corpo = corpo;
+    el._rotulo = rotulo;
+    el._ondas = corrida ? ondas : null;
+    if (corrida) el.dataset.correndo = "true";
+    // Ao abrir, o texto é montado uma única vez (e mantido em dia se ainda correr).
+    el.addEventListener("toggle", () => {
+      if (el.open) escreverPensa(el);
+    });
+    if (txt) escreverPensa(el);
+    return el;
+  }
+  function terminarPensa(el) {
+    delete el.dataset.correndo;
+    el._rotulo.textContent = "Raciocínio";
+    el._ondas?.remove();
+    el._ondas = null;
+    escreverPensa(el);
+    // Não mexe no `open`: fecha só se ninguém abriu (fica fechado como nasceu).
+    // O evento `toggle` é assíncrono, então não dá para confiar nele para saber
+    // se o usuário abriu — ler `el.open` aqui é o único sinal confiável.
   }
   function cabecalhoBot(agente, modelo) {
     const copiar = h("button", { class: "ic copiar-msg", title: "Copiar resposta", "aria-label": "Copiar resposta", onclick: (e) => {
@@ -556,7 +588,7 @@
         t._txt = c.text; // o markdown original, para o botão de copiar
         el.append(t);
       }
-      else if (c.type === "reasoning" && c.text) el.append(pensaEl(c.text, false));
+      else if (c.type === "reasoning" && c.text) el.append(pensaEl(c.text));
       else if (c.type === "tool") el.append(toolEl(c));
     }
     return el;
@@ -627,7 +659,7 @@
       const chave = t.split(".")[1] + ":" + (d.ordinal ?? 0);
       let p = v.partes.get(chave);
       if (!p) {
-        p = t.includes("reasoning") ? pensaEl("", true) : h("div", { class: "texto corrida" });
+        p = t.includes("reasoning") ? pensaEl("", t.endsWith(".started") || t.endsWith(".delta")) : h("div", { class: "texto corrida" });
         p._txt = "";
         v.partes.set(chave, p);
         v.el.append(p);
@@ -635,8 +667,9 @@
       if (t.endsWith(".delta")) p._txt += d.delta || "";
       if (t.endsWith(".ended") && typeof d.text === "string") p._txt = d.text;
       if (p.classList.contains("pensa")) {
-        p.querySelector(".corpo").textContent = p._txt;
-        if (t.endsWith(".ended")) p.open = false;
+        // Rodando: só o indicador animado. O texto entra no DOM quando abre ou no fim.
+        if (t.endsWith(".ended")) terminarPensa(p);
+        else if (p.open) escreverPensa(p);
       } else {
         p.replaceChildren(md(p._txt));
         if (t.endsWith(".ended")) p.classList.remove("corrida");

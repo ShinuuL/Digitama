@@ -1,5 +1,12 @@
 # Changelog
 
+## Extensão Digitama OpenCode 0.5.4 — 26/10/2026
+
+- **Agente em loop:** quando o agente chama a mesma ferramenta com a mesma entrada três vezes seguidas (e nada entre elas), a extensão interrompe a execução e explica o que houve, em vez de deixar rodando. Chamadas diferentes zeram a contagem, então alternar entre dois arquivos não é loop. Cada mensagem nova recomeça a contagem, e cada conversa é contada em separado.
+- **Raciocínio como animação:** o bloco começa fechado e mostra só um indicador animado ("Raciocinando" com ondas e pulso). Nada de texto é escrito na tela durante a geração: o raciocínio só é montado quando você abre o bloco, ou quando ele termina. Ao terminar, o bloco continua fechado (sem fechar na cara de quem abriu para acompanhar).
+- **Lista de agentes:** ao reconectar ao serviço, a extensão relê os agentes, em vez de ficar com a lista do primeiro connect. Se a leitura falhar, o erro aparece na conversa e a lista anterior é mantida — antes a falha era engolida em silêncio e o menu ficava preso nos agentes embutidos.
+- **Testes:** `test/repeticao.test.js` cobre a assinatura estável das chamadas (ordem das chaves não importa), o limite de repetições, a troca de ferramenta/entrada, o isolamento por sessão e o reinício após interromper.
+
 ## v0.4.2 — 26/10/2026
 
 - **Extensão Digitama OpenCode 0.5.3** (`digitama-opencode-0.5.3.vsix` no release; quem tem a 0.5.x recebe o aviso de atualização):
