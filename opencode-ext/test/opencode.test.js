@@ -1,6 +1,9 @@
 const test = require("node:test");
 const assert = require("node:assert");
-const { contextoUsado, cortarSse, dadosSse, urlDoStatus } = require("../out/opencode");
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
+const { contextoUsado, cortarSse, dadosSse, urlDoStatus, travaValida, pegarTrava, TRAVA_MS } = require("../out/opencode");
 
 test("contexto soma entrada, cache e saída do último passo", () => {
   assert.strictEqual(contextoUsado({ input: 131, output: 11, reasoning: 134, cache: { read: 6482, write: 0 } }), 6624);
@@ -30,4 +33,18 @@ test("argumento para o cmd: aspas com espaço, recusa o que o cmd interpreta", (
   assert.strictEqual(argCmd("--mcp"), "--mcp");
   assert.strictEqual(argCmd("C:\\Users\\Zé Silva\\x.exe"), '"C:\\Users\\Zé Silva\\x.exe"');
   for (const ruim of ["a&b", "x|y", "%PATH%", 'a"b', "c>d", "e^f", "!x!"]) assert.throws(() => argCmd(ruim));
+});
+
+test("trava de subida: só uma janela pega; abandonada é retomada", () => {
+  const arq = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "digitama-")), "sub", "subindo.lock");
+  assert.ok(pegarTrava(arq));
+  assert.ok(!pegarTrava(arq), "segunda janela espera");
+  const velha = new Date(Date.now() - TRAVA_MS - 1000);
+  fs.utimesSync(arq, velha, velha);
+  assert.ok(pegarTrava(arq), "trava abandonada");
+  assert.ok(!travaValida(undefined, 0));
+  assert.ok(travaValida(0, TRAVA_MS - 1));
+  assert.ok(!travaValida(0, TRAVA_MS));
+  assert.ok(travaValida(10, 0), "mtime poucos ms à frente do relógio ainda vale");
+  assert.ok(!travaValida(TRAVA_MS, 0), "data muito no futuro não vale");
 });

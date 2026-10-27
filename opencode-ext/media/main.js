@@ -225,17 +225,16 @@
   const hora = (ms) => new Date(ms).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
   function tagUso(m) {
     const u = usoDe(m);
-    if (u?.esgotadoAte) return h("span", { class: "tag esgotado", title: (u.cota.endsWith(":gratis") ? "Cota grátis compartilhada esgotada" : "Recusou por limite") + "; libera por volta das " + hora(u.esgotadoAte) }, "esgotado até " + hora(u.esgotadoAte));
+    if (u?.esgotadoAte) return h("span", { class: "tag esgotado", title: (u.cota.endsWith(":gratis") ? "Cota grátis compartilhada esgotada" : "Recusou por limite") + (u.exato ? "; o servidor informou que volta às " : "; estimativa: volta por volta das ") + hora(u.esgotadoAte) }, "esgotado até " + (u.exato ? "" : "~") + hora(u.esgotadoAte));
     return m.gratis ? h("span", { class: "tag gratis" }, "grátis") : null;
   }
-  /** "5 h: 120k de ~300k" com barrinha; sem limite aprendido, só o usado. */
+  /** "últimas 5 h: 120k": o servidor não publica o limite, então só o usado. */
   function barraUso(m) {
     const u = usoDe(m);
-    if (!u || (!u.usado && !u.limite)) return null;
+    if (!u || !u.usado) return null;
     const comp = u.cota && u.cota.endsWith(":gratis");
-    const txt = (comp ? "cota grátis 5 h: " : "últimas 5 h: ") + fmt(u.usado) + (u.limite ? " de ~" + fmt(u.limite) : "") + (comp && u.usadoModelo ? " · este: " + fmt(u.usadoModelo) : "");
-    return h("span", { class: "uso", "data-faixa": u.pct >= 90 ? "alta" : u.pct >= 70 ? "media" : "baixa", title: u.limite ? "Limite aprendido da última recusa por cota" : "O limite aparece depois da primeira recusa por cota" },
-      u.limite ? h("span", { class: "barra" }, h("span", { style: "width:" + u.pct + "%" })) : null, txt);
+    const txt = (comp ? "cota grátis 5 h: " : "últimas 5 h: ") + fmt(u.usado) + (comp && u.usadoModelo ? " · este: " + fmt(u.usadoModelo) : "");
+    return h("span", { class: "uso", "data-faixa": "baixa", title: "Tokens usados nas últimas 5 h (todas as janelas e sessões)" }, txt);
   }
   function capsDe(m, tam) {
     return (m?.entrada || []).filter((c) => CAPACIDADES[c]).map((c) => h("span", { class: "cap", title: CAPACIDADES[c].rotulo }, I(CAPACIDADES[c].icone, tam)));
@@ -443,9 +442,9 @@
     usoEl.hidden = !u || (!u.usado && !u.esgotadoAte);
     if (usoEl.hidden) return;
     const comp = u.cota && u.cota.endsWith(":gratis");
-    usoEl.dataset.faixa = u.esgotadoAte ? "esgotado" : u.pct >= 90 ? "alta" : u.pct >= 70 ? "media" : "baixa";
-    usoEl.replaceChildren(I("zap", 11), u.esgotadoAte ? "esgotado até " + hora(u.esgotadoAte) : (comp ? "cota " : "5 h ") + fmt(u.usado) + (u.limite ? "/~" + fmt(u.limite) : ""));
-    usoEl.title = (comp ? "Cota grátis compartilhada (todos os modelos grátis do provedor), janela de 5 h" : "Uso deste modelo nas últimas 5 h") + (u.limite ? "" : ". O limite aparece depois da primeira recusa por cota.") + " Clique para ver por modelo.";
+    usoEl.dataset.faixa = u.esgotadoAte ? "esgotado" : "baixa";
+    usoEl.replaceChildren(I("zap", 11), u.esgotadoAte ? "esgotado até " + (u.exato ? "" : "~") + hora(u.esgotadoAte) : (comp ? "cota " : "5 h ") + fmt(u.usado));
+    usoEl.title = (comp ? "Cota grátis compartilhada (todos os modelos grátis do provedor), janela de 5 h" : "Uso deste modelo nas últimas 5 h") + (u.esgotadoAte ? (u.exato ? ". Horário de volta informado pelo servidor." : ". Horário de volta estimado (o servidor não informou).") : "") + " Clique para ver por modelo.";
   }
 
   // tema vindo das Configurações: cor de destaque, densidade e animações
@@ -484,9 +483,9 @@
     chipModelo.replaceChildren(I("brain", 13), h("span", { class: "rot" }, m?.name || "modelo padrão"), ...capsDe(m, 12), I("chevron", 12));
     chipModelo.title = "Modelo: " + (m ? m.name + " · " + fmt(m.contexto) + " de contexto" : "padrão");
     const um = usoDe(m);
-    chipModelo.dataset.uso = um?.esgotadoAte ? "esgotado" : um?.pct >= 80 ? "perto" : "";
+    chipModelo.dataset.uso = um?.esgotadoAte ? "esgotado" : "";
     if (um?.esgotadoAte) chipModelo.title += " · esgotado até " + hora(um.esgotadoAte);
-    else if (um?.limite) chipModelo.title += " · 5 h: " + fmt(um.usado) + " de ~" + fmt(um.limite);
+    else if (um?.usado) chipModelo.title += " · 5 h: " + fmt(um.usado);
     if (!menu.hidden) desenharMenu();
 
     botao.replaceChildren(I(E.rodando ? "stop" : "send", 15));

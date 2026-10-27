@@ -25,26 +25,45 @@ test("soma as estatísticas do servidor por modelo (variantes juntas) e por cota
   assert.deepStrictEqual(s.porCota, { "opencode:gratis": 185, "openai/gpt-x": 7 });
 });
 
-test("janelas diferentes: mescla pelo maior limite e bloqueio vigente", () => {
-  const a = { limites: { c: 1000 }, bloqueios: { c: 5 * H, velho: 1 } };
-  const b = { limites: { c: 3000, d: 10 }, bloqueios: { c: 4 * H } };
-  assert.deepStrictEqual(u.mesclar(a, b, 2 * H), { limites: { c: 3000, d: 10 }, bloqueios: { c: 5 * H } });
+test("o tipo do OpenCode (provider.free-limit) é recusa por cota", () => {
+  assert.ok(u.erroDeLimite("Free usage limit reached.", undefined, "provider.free-limit"));
+  assert.ok(u.erroDeLimite("", undefined, "provider.rate-limit"));
 });
 
-test("recusa aprende o limite (só sobe) e bloqueia; situação mostra pct e esgotado", () => {
+test("horário de volta vem do retryAfterMs do servidor (recusa real gravada)", () => {
+  // duas recusas reais, com 8 min de diferença, apontam para o mesmo instante
+  const a = u.liberaEm(26336000, 1793119257732);
+  const b = u.liberaEm(25822000, 1793119771967);
+  assert.deepStrictEqual(a, { ate: 1793145593732, exato: true });
+  assert.ok(Math.abs(a.ate - b.ate) < 1000);
+});
+
+test("sem retryAfterMs: estima 5 h e marca como aproximado", () => {
+  for (const v of [undefined, null, 0, -5, "abc"]) assert.deepStrictEqual(u.liberaEm(v, 1000), { ate: 1000 + u.JANELA_MS, exato: false }, String(v));
+  assert.deepStrictEqual(u.liberaEm("60000", 0), { ate: 60000, exato: true });
+});
+
+test("situação: só o usado; esgotado com o horário enquanto o bloqueio vale", () => {
   const d = u.vazio();
-  u.marcarLimite(d, "c", 5000, 6 * H);
-  u.marcarLimite(d, "c", 0, 6 * H);
-  assert.strictEqual(d.limites.c, 5000);
-  assert.deepStrictEqual(u.situacao(d, "c", 2500, 3 * H), { usado: 2500, limite: 5000, pct: 50, esgotadoAte: 6 * H });
-  assert.strictEqual(u.situacao(d, "c", 0, 7 * H).esgotadoAte, undefined);
+  assert.deepStrictEqual(u.situacao(d, "c", 500, 0), { usado: 500 });
+  u.marcarLimite(d, "c", { ate: 2 * H, exato: true });
+  assert.deepStrictEqual(u.situacao(d, "c", 500, 1 * H), { usado: 500, esgotadoAte: 2 * H, exato: true });
+  assert.deepStrictEqual(u.situacao(d, "c", 500, 2 * H), { usado: 500 });
 });
 
-test("primeiro uso da janela por bisseção (libera 5 h depois dele)", async () => {
-  const agora = 10 * H;
-  const primeiro = 7 * H + 12 * 60_000;
-  const temPassos = async (de, ate) => ate >= primeiro && de <= agora;
-  const achado = await u.primeiroUso(temPassos, agora);
-  assert.ok(Math.abs(achado - primeiro) <= 60_000, String(achado - primeiro));
-  assert.strictEqual(await u.primeiroUso(async () => false, agora), undefined);
+test("a resposta nova do servidor substitui a anterior; estimativa não sobrepõe a exata", () => {
+  const d = u.vazio();
+  u.marcarLimite(d, "c", { ate: 3 * H, exato: true });
+  u.marcarLimite(d, "c", { ate: 9 * H, exato: false });
+  assert.deepStrictEqual(d.bloqueios.c, { ate: 3 * H, exato: true });
+  u.marcarLimite(d, "c", { ate: 2 * H, exato: true });
+  assert.deepStrictEqual(d.bloqueios.c, { ate: 2 * H, exato: true });
+});
+
+test("mesclar entre janelas: exato vence estimativa, vencido e formato antigo saem", () => {
+  const a = { bloqueios: { c: { ate: 5 * H, exato: false }, velho: { ate: 1, exato: true } } };
+  const b = { bloqueios: { c: { ate: 4 * H, exato: true }, d: { ate: 3 * H, exato: false } } };
+  const antigo = { limites: { c: 1000 }, limitesEm: { c: 1 }, bloqueios: { c: 6 * H } };
+  const r = u.mesclar(u.mesclar(a, b, 1 * H), antigo, 1 * H);
+  assert.deepStrictEqual(r, { bloqueios: { c: { ate: 4 * H, exato: true }, d: { ate: 3 * H, exato: false } } });
 });

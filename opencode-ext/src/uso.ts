@@ -2,29 +2,37 @@
 //
 // O USO vem do próprio serviço do OpenCode (/api/experimental/session/stats),
 // que soma todas as sessões: todas as janelas do VS Code, o TUI, o celular e os
-// subagentes. O LIMITE não é publicado, então é aprendido: quando o provedor
-// recusa por cota (FreeUsageLimitError, "rate limit", 429), o uso daquele momento
-// vira o limite da cota e ela fica esgotada até o primeiro uso sair da janela.
-// Limites e bloqueios ficam num arquivo compartilhado entre as janelas.
+// subagentes. O limite não é publicado e não é adivinhado: só mostramos o usado.
+//
+// QUANDO VOLTA vem do servidor: a recusa por cota (provider.free-limit,
+// provider.rate-limit, 429) chega com `retryAfterMs`, tirado do cabeçalho
+// retry-after. Recusas seguidas apontam para o mesmo instante, então
+// recusa + retryAfterMs é o horário exato em que a cota libera. Sem esse campo,
+// estimamos o fim da janela de 5 h e marcamos como aproximado.
+// Os bloqueios ficam num arquivo compartilhado entre as janelas.
 
 export const JANELA_MS = 5 * 60 * 60 * 1000;
 
+export interface Bloqueio {
+  /** Quando a cota libera (ms). */
+  ate: number;
+  /** true quando veio do servidor (retryAfterMs); false quando é a estimativa de 5 h. */
+  exato: boolean;
+}
+
 export interface Compartilhado {
-  /** Tokens usados na janela quando veio a recusa: o limite aprendido, por cota. */
-  limites: Record<string, number>;
-  /** Até quando a cota está esgotada (ms), por cota. */
-  bloqueios: Record<string, number>;
+  /** Cotas esgotadas, por cota. */
+  bloqueios: Record<string, Bloqueio>;
 }
 
 export interface Situacao {
   usado: number;
-  limite?: number;
-  /** 0–100, só quando o limite já foi aprendido. */
-  pct?: number;
   esgotadoAte?: number;
+  /** O horário de volta veio do servidor. */
+  exato?: boolean;
 }
 
-export const vazio = (): Compartilhado => ({ limites: {}, bloqueios: {} });
+export const vazio = (): Compartilhado => ({ bloqueios: {} });
 
 /** O que conta para a cota: o que entra e o que sai (cache lido não conta). */
 export function tokensDoPasso(t: { input?: number; output?: number; reasoning?: number } | undefined): number {
@@ -35,8 +43,15 @@ export function tokensDoPasso(t: { input?: number; output?: number; reasoning?: 
 /** Erros de cota/limite de taxa dos provedores (pelo tipo, status ou texto). */
 export function erroDeLimite(msg: string | undefined, status?: number, tipo?: string): boolean {
   if (status === 429) return true;
-  if (tipo && /UsageLimit|RateLimit|Quota/i.test(tipo)) return true;
+  if (tipo && /UsageLimit|RateLimit|Quota|free-limit|rate-limit/i.test(tipo)) return true;
   return !!msg && /exceed|rate.?limit|quota|too many requests|\b429\b|limit reached|insufficient.?(credit|balance)|usage limit/i.test(msg);
+}
+
+/** Quando a cota libera, pelo que o servidor mandou na recusa; sem o campo, estima 5 h. */
+export function liberaEm(retryAfterMs: unknown, agora: number): Bloqueio {
+  const ms = Number(retryAfterMs);
+  if (Number.isFinite(ms) && ms > 0) return { ate: agora + ms, exato: true };
+  return { ate: agora + JANELA_MS, exato: false };
 }
 
 /** Soma as estatísticas do servidor por modelo (variantes juntas) e por cota. */
@@ -53,45 +68,38 @@ export function somar(modelos: { model: { id: string; providerID: string }; toke
   return { porModelo, porCota };
 }
 
-/** Junta o que outra janela gravou com o desta: o maior limite e o bloqueio mais longo vencem. */
+/** Qual bloqueio vale: o do servidor vence a estimativa; entre iguais, o mais longo. */
+function melhor(a: Bloqueio | undefined, b: Bloqueio): Bloqueio {
+  if (!a) return b;
+  if (a.exato !== b.exato) return a.exato ? a : b;
+  return b.ate > a.ate ? b : a;
+}
+
+/** Aceita só bloqueios no formato atual (o uso.json antigo guardava números soltos). */
+function valido(b: any): b is Bloqueio {
+  return !!b && typeof b === "object" && typeof b.ate === "number";
+}
+
+/** Junta o que outra janela gravou com o desta, descartando bloqueios vencidos. */
 export function mesclar(a: Compartilhado, b: Compartilhado, agora: number): Compartilhado {
   const r = vazio();
   for (const x of [a, b]) {
-    for (const [k, v] of Object.entries(x?.limites ?? {})) r.limites[k] = Math.max(r.limites[k] ?? 0, v);
-    for (const [k, v] of Object.entries(x?.bloqueios ?? {})) if (v > agora) r.bloqueios[k] = Math.max(r.bloqueios[k] ?? 0, v);
+    for (const [k, v] of Object.entries(x?.bloqueios ?? {})) {
+      if (!valido(v) || v.ate <= agora) continue;
+      r.bloqueios[k] = melhor(r.bloqueios[k], { ate: v.ate, exato: !!v.exato });
+    }
   }
   return r;
 }
 
-/** Recusa por cota: aprende o limite (só sobe) e bloqueia até `ate`. */
-export function marcarLimite(d: Compartilhado, cota: string, usado: number, ate: number) {
-  if (usado > 0) d.limites[cota] = Math.max(d.limites[cota] ?? 0, usado);
-  d.bloqueios[cota] = Math.max(d.bloqueios[cota] ?? 0, ate);
+/** Recusa por cota: bloqueia até o horário que o servidor deu (ou a estimativa). */
+export function marcarLimite(d: Compartilhado, cota: string, b: Bloqueio) {
+  // a resposta mais recente do servidor é a verdade: substitui a anterior
+  d.bloqueios[cota] = b.exato ? b : melhor(d.bloqueios[cota], b);
 }
 
 export function situacao(d: Compartilhado, cota: string, usado: number, agora: number): Situacao {
-  const limite = d.limites[cota];
-  const ate = d.bloqueios[cota];
-  return {
-    usado,
-    limite,
-    pct: limite ? Math.min(100, Math.round((usado / limite) * 100)) : undefined,
-    esgotadoAte: ate && ate > agora ? ate : undefined,
-  };
-}
-
-/**
- * Quando foi o primeiro uso dentro da janela: bisseção sobre "houve passos em
- * [início, t]?". A cota libera 5 h depois dele.
- */
-export async function primeiroUso(temPassos: (de: number, ate: number) => Promise<boolean>, agora: number, precisaoMs = 60_000): Promise<number | undefined> {
-  let lo = agora - JANELA_MS;
-  let hi = agora;
-  if (!(await temPassos(lo, hi))) return undefined;
-  while (hi - lo > precisaoMs) {
-    const meio = Math.floor((lo + hi) / 2);
-    if (await temPassos(agora - JANELA_MS, meio)) hi = meio;
-    else lo = meio;
-  }
-  return hi;
+  const b = d.bloqueios[cota];
+  if (!b || b.ate <= agora) return { usado };
+  return { usado, esgotadoAte: b.ate, exato: b.exato };
 }

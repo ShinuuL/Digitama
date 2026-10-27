@@ -1,5 +1,12 @@
 # Changelog
 
+## Extensão Digitama OpenCode 0.5.5 — 27/10/2026
+
+- **Horário de volta vindo do servidor:** a recusa `provider.free-limit` traz `retryAfterMs` (cabeçalho `retry-after`). Recusa + `retryAfterMs` é o horário exato em que a cota libera — duas recusas reais com 8 min de diferença apontaram para o mesmo instante. A pílula mostra "esgotado até 14:39"; sem o campo, estima 5 h e mostra "~14:39".
+- **Cálculo de uso limpo:** saíram o limite "aprendido" (que gerava a pílula "cota 2,8M/~793k" em 100% sem bloqueio nenhum), a barra/percentual e a bisseção que fazia dezenas de consultas ao servidor para estimar o fim da janela. A pílula mostra só o usado nas últimas 5 h. O `uso.json` antigo é ignorado.
+- **Serviço sobe sozinho:** ao abrir, a extensão verifica `opencode service status` e, se não houver serviço, roda `opencode service start` desanexado. Entre várias janelas, só uma sobe (trava `subindo.lock` com prazo de 30 s); as outras esperam o endereço aparecer. A reconexão faz a mesma checagem se o serviço cair.
+- **Testes:** `test/uso.test.js` usa as recusas reais (horário exato, reserva de 5 h, mescla entre janelas, formato antigo); `test/opencode.test.js` cobre a trava (só uma janela pega, abandonada é retomada).
+
 ## Extensão Digitama OpenCode 0.5.4 — 26/10/2026
 
 - **Agente em loop:** quando o agente chama a mesma ferramenta com a mesma entrada três vezes seguidas (e nada entre elas), a extensão interrompe a execução e explica o que houve, em vez de deixar rodando. Chamadas diferentes zeram a contagem, então alternar entre dois arquivos não é loop. Cada mensagem nova recomeça a contagem, e cada conversa é contada em separado.

@@ -2,7 +2,7 @@
 // Nunca lê a senha do ~/.config/opencode/service.json: a extensão pareia como
 // qualquer dispositivo (`opencode api server.pair` → código de uso único →
 // /auth/connect → token) e guarda o token só na memória.
-import { exec, execFile } from "node:child_process";
+import { exec, execFile, spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 
@@ -104,6 +104,53 @@ export function urlDoStatus(saida: string): string | undefined {
   return saida.match(/https?:\/\/[\w.\-]+:\d+/)?.[0];
 }
 
+/** Trava de quem está subindo o serviço: depois deste tempo é considerada abandonada. */
+export const TRAVA_MS = 30_000;
+
+/** A trava existe e ainda vale (outra janela está subindo o serviço agora)? */
+export function travaValida(criadaEm: number | undefined, agora: number): boolean {
+  // o mtime pode sair alguns ms à frente do relógio (Windows): só data muito no futuro é inválida
+  return criadaEm !== undefined && Math.abs(agora - criadaEm) < TRAVA_MS;
+}
+
+/**
+ * Pega a trava (arquivo criado com "wx", atômico): só uma janela roda o
+ * `service start`. Trava abandonada (janela fechada no meio) é removida.
+ */
+export function pegarTrava(arquivo: string, agora = Date.now()): boolean {
+  try {
+    fs.mkdirSync(path.dirname(arquivo), { recursive: true });
+    fs.writeFileSync(arquivo, String(process.pid), { flag: "wx" });
+    return true;
+  } catch {
+    let criada: number | undefined;
+    try {
+      criada = fs.statSync(arquivo).mtimeMs;
+    } catch {
+      return pegarTrava(arquivo, agora); // sumiu entre as duas chamadas
+    }
+    if (travaValida(criada, agora)) return false;
+    try {
+      fs.rmSync(arquivo, { force: true });
+      fs.writeFileSync(arquivo, String(process.pid), { flag: "wx" });
+      return true;
+    } catch {
+      return false; // outra janela pegou primeiro
+    }
+  }
+}
+
+/**
+ * `opencode service start` desanexado: o servidor fica rodando depois e não
+ * pode prender a extensão (nem morrer junto com a janela que o subiu).
+ */
+function iniciarServico(exe: string) {
+  const cmd = exe.toLowerCase().endsWith(".cmd");
+  const p = spawn(cmd ? `"${exe}"` : exe, ["service", "start"], { detached: true, stdio: "ignore", windowsHide: true, shell: cmd });
+  p.on("error", () => {}); // a falha aparece como "não subiu" na espera pelo status
+  p.unref();
+}
+
 /** Ocupação do contexto: o que foi para o modelo no último passo, mais a resposta. */
 export function contextoUsado(t: Tokens | undefined): number {
   if (!t) return 0;
@@ -135,7 +182,11 @@ export class Servico {
   base = "";
   private auth = "";
 
-  constructor(private exe: () => string | undefined) {}
+  /** Avisado quando esta janela vai subir o serviço (ou esperar outra subir). */
+  aoSubir: (quem: "eu" | "outra") => void = () => {};
+
+  /** `trava`: arquivo compartilhado entre as janelas para só uma subir o serviço. */
+  constructor(private exe: () => string | undefined, private trava?: string) {}
 
   private opencode(): string {
     const e = this.exe();
@@ -156,15 +207,43 @@ export class Servico {
   }
 
   async conectar(): Promise<void> {
-    const exe = this.opencode();
-    const url = urlDoStatus(await rodar(exe, ["service", "status"]).catch(() => ""));
-    if (!url) throw new Error("O serviço do OpenCode não está rodando (opencode service start).");
+    const url = await this.garantir();
     this.base = url;
     const { code } = await this.codigo();
     const r = await fetch(`${url}/auth/connect/${encodeURIComponent(code)}`, { headers: { accept: "application/json" } });
     if (!r.ok) throw new Error(`Pareamento recusado (${r.status}).`);
     const { token } = (await r.json()) as { token: string };
     this.auth = "Basic " + Buffer.from("opencode:" + token).toString("base64");
+  }
+
+  /** Endereço do serviço; se estiver parado, sobe (ou espera outra janela subir). */
+  async garantir(): Promise<string> {
+    const exe = this.opencode();
+    return (await this.endereco(exe)) ?? (await this.subir(exe));
+  }
+
+  private async endereco(exe: string): Promise<string | undefined> {
+    return urlDoStatus(await rodar(exe, ["service", "status"]).catch(() => ""));
+  }
+
+  /**
+   * Serviço parado: a primeira janela pega a trava e roda o `service start`;
+   * as outras só esperam o status mostrar o endereço. Nunca sobe dois.
+   */
+  private async subir(exe: string): Promise<string> {
+    const minha = !this.trava || pegarTrava(this.trava);
+    this.aoSubir(minha ? "eu" : "outra");
+    try {
+      if (minha) iniciarServico(exe);
+      for (let i = 0; i < 20; i++) {
+        await new Promise((r) => setTimeout(r, 1000));
+        const url = await this.endereco(exe);
+        if (url) return url;
+      }
+      throw new Error("O serviço do OpenCode não subiu em 20 s. Rode `opencode service start` no terminal para ver o erro.");
+    } finally {
+      if (minha && this.trava) fs.rmSync(this.trava, { force: true });
+    }
   }
 
   get conectado() {

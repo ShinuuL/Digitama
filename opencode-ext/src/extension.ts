@@ -25,8 +25,11 @@ interface Sessao {
 
 export function activate(ctx: vscode.ExtensionContext) {
   const cfg = () => vscode.workspace.getConfiguration("digitamaOpencode");
-  const svc = new Servico(() => acharOpencode(cfg().get<string>("executavel", "")));
+  const svc = new Servico(() => acharOpencode(cfg().get<string>("executavel", "")), path.join(ctx.globalStorageUri.fsPath, "subindo.lock"));
   const prov = new Painel(ctx, svc);
+  // ao abrir a janela o serviço já fica de pé; se outra janela estiver subindo, só espera
+  svc.aoSubir = (quem) => prov.avisarSubida(quem);
+  void svc.garantir().catch(() => {}); // o painel mostra o erro quando abrir
   // colados (Ctrl+V de arquivos/prints) ficam numa pasta da extensão: apaga os de mais de 1 dia
   try {
     const dir = path.join(ctx.globalStorageUri.fsPath, "anexos");
@@ -378,7 +381,7 @@ class Painel implements vscode.WebviewViewProvider {
     const mAtual = this.atual?.id === sid ? this.atual?.model : undefined;
     const ref = this.modeloDaSessao.get(sid) ?? (mAtual ? `${mAtual.providerID}/${mAtual.id}` : undefined);
     if (!ref) return;
-    void this.registrarLimite(ref);
+    this.registrarLimite(ref, err.retryAfterMs ?? d.retryAfterMs);
   }
 
   /** Conta chamadas de ferramenta para perceber o agente repetindo os mesmos passos. */
@@ -408,36 +411,29 @@ class Painel implements vscode.WebviewViewProvider {
     });
   }
 
-  private async registrarLimite(ref: string) {
+  private registrarLimite(ref: string, retryAfterMs: unknown) {
     const cota = this.cotaDe(ref);
-    if ((this.uso.bloqueios[cota] ?? 0) > Date.now()) return this.avisarLimite(ref); // outra janela já marcou
-    await this.atualizarUso();
-    const agora = Date.now();
-    // quando a cota libera: 5 h depois do primeiro uso que ainda está na janela
-    const temPassos = async (de: number, ate: number) => {
-      const j = await this.svc.req<{ data: any }>("GET", `/api/experimental/session/stats?from=${de}&to=${ate}&tools=none`).catch(() => undefined);
-      return (j?.data?.models ?? []).some((m: any) => this.cotaDe(`${m.model.providerID}/${m.model.id}`) === cota && m.steps > 0);
-    };
-    const primeiro = await uso.primeiroUso(temPassos, agora).catch(() => undefined);
-    uso.marcarLimite(this.uso, cota, this.gasto.porCota[cota] ?? 0, (primeiro ?? agora) + uso.JANELA_MS);
+    // o servidor diz quando a cota volta (retry-after); outra janela pode já ter marcado
+    uso.marcarLimite(this.uso, cota, uso.liberaEm(retryAfterMs, Date.now()));
     this.gravarUso();
     this.estado();
     this.avisarLimite(ref);
+    void this.atualizarUso();
   }
 
   private avisarLimite(ref: string) {
     const cota = this.cotaDe(ref);
-    const ate = this.uso.bloqueios[cota] ?? Date.now() + uso.JANELA_MS;
+    const b = this.uso.bloqueios[cota];
     const nome = this.modelos.find((m) => `${m.providerID}/${m.id}` === ref)?.name ?? ref;
-    const hora = new Date(ate).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
-    const lim = this.uso.limites[cota];
+    const hora = b ? new Date(b.ate).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" }) : "";
+    const volta = !b ? "" : b.exato ? ` Volta às ${hora} (horário informado pelo servidor).` : ` Deve voltar por volta das ${hora} (estimativa: o servidor não informou).`;
     const compartilhada = cota !== ref;
     this.post({
       tipo: "aviso",
       nivel: "erro",
       texto: compartilhada
-        ? `A cota grátis acabou (${nome} recusou${lim ? `, ~${lim.toLocaleString("pt-BR")} tokens em 5 h` : ""}). Ela vale para todos os modelos grátis deste provedor, em todas as janelas: trocar para outro grátis não resolve. Libera por volta das ${hora}; até lá, use um modelo pago ou de outro provedor.`
-        : `${nome} chegou no limite da janela de 5 h${lim ? ` (~${lim.toLocaleString("pt-BR")} tokens)` : ""}. Libera por volta das ${hora}. Troque de modelo para continuar.`,
+        ? `A cota grátis acabou (${nome} recusou). Ela vale para todos os modelos grátis deste provedor, em todas as janelas: trocar para outro grátis não resolve.${volta} Até lá, use um modelo pago ou de outro provedor.`
+        : `${nome} chegou no limite de uso.${volta} Troque de modelo para continuar.`,
       acao: { rotulo: "Trocar modelo", menu: "modelo" },
     });
   }
@@ -627,6 +623,10 @@ class Painel implements vscode.WebviewViewProvider {
       const r = await this.svc.req<{ data: any }>("POST", `/api/session/${s.id}/prompt`, { text: texto });
       this.post({ tipo: "eco", mensagem: { id: r.data?.id, type: "user", text: texto } });
     }
+  }
+
+  avisarSubida(quem: "eu" | "outra") {
+    vscode.window.setStatusBarMessage(quem === "eu" ? "$(sync~spin) Subindo o serviço do OpenCode…" : "$(sync~spin) Outra janela está subindo o serviço do OpenCode…", 20_000);
   }
 
   private avisar(texto: string, nivel: "ok" | "info" = "info") {
