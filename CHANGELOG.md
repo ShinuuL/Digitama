@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.4.3 — 28/10/2026
+
+- **Prints e imagens em miniatura no chat:** antes, as imagens das suas mensagens ocupavam a largura toda da conversa. Agora aparecem em miniatura (até 160×120, lado a lado). Clicar abre em tamanho real por cima do chat, e um clique ou Esc fecham.
+- **Pet não fica mais mudo com o OpenCode:** quando a assinatura de eventos do OpenCode cai, o plugin assina de novo sozinho, com espera crescente de 1 s a 30 s. Antes, o pet parava de reagir até reiniciar o OpenCode. **Para valer, reinstale o plugin:** em Configurações → OpenCode, o app mostra "desatualizado: instale de novo". Depois, reinicie o OpenCode.
+- **Extensão Digitama OpenCode 0.5.7** (`digitama-opencode-0.5.7.vsix` no release): `@arquivo` e `@agente`, arrastar e soltar, fila de mensagens, faixa de desfeitas, aviso de chamada de ferramenta escrita como texto, loop em ciclo e uso desde o reinício diário da cota. Detalhes na entrada da 0.5.7 abaixo.
+
 ## Extensão Digitama OpenCode 0.5.7 — 28/10/2026
 
 - **`@` na mensagem:** `@` abre a lista de arquivos do projeto e de agentes. O arquivo escolhido vira anexo, com a mesma regra do clipe: vai em `files` ou, se o modelo não lê aquele tipo, pelo caminho. A busca usa a lista do próprio VS Code, sem `node_modules`, `.git`, `target`, `out` e `dist`, e acha também por letras na ordem ("extts" → `extension.ts`). O `@agente` faz o OpenCode chamar aquele agente nesta mensagem, sem trocar o da conversa; se o servidor recusar a menção, a mensagem sai sem ela. Setas, Enter e Tab navegam pela lista. Ideia trazida do OpenChamber (MIT).
