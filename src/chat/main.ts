@@ -437,6 +437,32 @@ function addShot(shot: Shot | null) {
 
 // ── Envio ────────────────────────────────────────────────────────────────────
 
+/** Imagem em tamanho real por cima do chat; clique ou Esc fecham. */
+function zoomShot(src: string) {
+  const box = el("div", "zoom-shot");
+  const img = el("img");
+  img.src = src;
+  box.append(img);
+  const close = () => {
+    box.remove();
+    window.removeEventListener("keydown", onKey, true);
+  };
+  const onKey = (e: KeyboardEvent) => {
+    if (e.key !== "Escape") return;
+    e.stopPropagation();
+    close();
+  };
+  box.onclick = close;
+  window.addEventListener("keydown", onKey, true);
+  document.body.append(box);
+}
+
+// miniaturas da conversa: clicar amplia
+$("#log").addEventListener("click", (e) => {
+  const t = e.target;
+  if (t instanceof HTMLImageElement && t.classList.contains("shot")) zoomShot(t.src);
+});
+
 /** A sua mensagem na conversa (ao redesenhar, os anexos vêm só com o nome). */
 function showUser(text: string, files: { kind: string; name: string; mediaType?: string; data?: string }[]) {
   const thumbs = files

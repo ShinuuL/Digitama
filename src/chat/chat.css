@@ -335,10 +335,35 @@ main {
   padding: 0 4px;
   background: var(--dv-dark);
 }
+/* print/imagem na conversa: miniatura; clicar abre em tamanho real */
 .msg img.shot {
-  display: block;
+  display: inline-block;
+  vertical-align: top;
+  max-width: min(160px, 100%);
+  max-height: 120px;
+  margin: 0 6px 6px 0;
+  object-fit: cover;
+  cursor: zoom-in;
+  box-shadow: 0 0 0 2px var(--dv-cyan);
+  transition: box-shadow 0.15s;
+}
+.msg img.shot:hover {
+  box-shadow: 0 0 0 2px var(--dv-cyan), 0 0 0 5px rgba(0, 0, 0, 0.35);
+}
+.zoom-shot {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: rgba(3, 9, 28, 0.88);
+  cursor: zoom-out;
+}
+.zoom-shot img {
   max-width: 100%;
-  margin-bottom: 6px;
+  max-height: 100%;
+  object-fit: contain;
   box-shadow: 0 0 0 2px var(--dv-cyan);
 }
 
