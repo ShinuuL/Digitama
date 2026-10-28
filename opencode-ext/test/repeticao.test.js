@@ -1,10 +1,10 @@
 const test = require("node:test");
 const assert = require("node:assert");
-const { assinatura, DetectorRepeticao } = require("../out/repeticao");
+const { assinatura, chamadaEmTexto, DetectorRepeticao } = require("../out/repeticao");
 
 function coletor() {
   const paradas = [];
-  const d = new DetectorRepeticao((sessao, ferramenta) => paradas.push({ sessao, ferramenta }));
+  const d = new DetectorRepeticao((sessao, ferramenta, motivo) => paradas.push({ sessao, ferramenta, motivo }));
   return { d, paradas };
 }
 
@@ -23,16 +23,45 @@ test("duas chamadas iguais são toleradas; a terceira seguida interrompe", () =>
   d.ferramenta("s1", "read", { file: "a.ts" });
   assert.deepStrictEqual(paradas, []);
   d.ferramenta("s1", "read", { file: "a.ts" });
-  assert.deepStrictEqual(paradas, [{ sessao: "s1", ferramenta: "read" }]);
+  assert.deepStrictEqual(paradas, [{ sessao: "s1", ferramenta: "read", motivo: "seguidas" }]);
 });
 
-test("uma chamada diferente no meio zera a contagem", () => {
+test("uma chamada diferente no meio zera a contagem de seguidas", () => {
   const { d, paradas } = coletor();
-  for (let i = 0; i < 5; i++) {
+  for (let i = 0; i < 3; i++) {
     d.ferramenta("s1", "read", { file: "a.ts" });
     d.ferramenta("s1", "read", { file: "b.ts" });
   }
-  assert.deepStrictEqual(paradas, [], "alternar entre duas chamadas não é loop");
+  assert.deepStrictEqual(paradas, [], "alternar poucas vezes ainda não é loop");
+});
+
+test("ciclo curto que volta sempre à mesma chamada interrompe", () => {
+  const { d, paradas } = coletor();
+  for (let i = 0; i < 3; i++) {
+    d.ferramenta("s1", "read", { file: "a.ts" });
+    d.ferramenta("s1", "edit", { file: "a.ts" });
+  }
+  assert.deepStrictEqual(paradas, []);
+  d.ferramenta("s1", "read", { file: "a.ts" });
+  assert.deepStrictEqual(paradas, [{ sessao: "s1", ferramenta: "read", motivo: "ciclo" }]);
+});
+
+test("chamadas espalhadas fora da janela não contam como ciclo", () => {
+  const { d, paradas } = coletor();
+  for (let i = 0; i < 6; i++) {
+    d.ferramenta("s1", "read", { file: "a.ts" });
+    for (let j = 0; j < 3; j++) d.ferramenta("s1", "grep", { pattern: `p${i}${j}` });
+  }
+  assert.deepStrictEqual(paradas, []);
+});
+
+test("chamada de ferramenta escrita como texto é reconhecida", () => {
+  assert.ok(chamadaEmTexto('[tool_call tool=functions.write]({"path":"x.md","content":"oi"})'));
+  assert.ok(chamadaEmTexto("Vou criar.\n<tool_call>\n{\"name\":\"write\"}\n</tool_call>"));
+  assert.ok(chamadaEmTexto('{"name": "bash", "arguments": {"command": "ls"}}'));
+  assert.ok(chamadaEmTexto('functions.edit({"file":"a"})'));
+  assert.ok(!chamadaEmTexto("Criei o arquivo e rodei os testes."));
+  assert.ok(!chamadaEmTexto('Exemplo:\n```json\n{"name": "bash", "arguments": {}}\n```'), "exemplo em bloco de código não conta");
 });
 
 test("mudar a entrada conta como chamada nova", () => {

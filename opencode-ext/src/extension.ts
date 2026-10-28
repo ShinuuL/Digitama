@@ -12,7 +12,12 @@ import { COMANDOS, Comando, lerComando, lerShell } from "./comandos";
 import * as uso from "./uso";
 import { Anexo, classificar, comCaminhos } from "./anexos";
 import { Atualizador } from "./atualizador";
-import { DetectorRepeticao, REPETICOES_ATE_PARAR } from "./repeticao";
+import { buscar, mencoesDeAgentes } from "./mencoes";
+import { chamadaEmTexto, DetectorRepeticao, JANELA_CICLO, MotivoRepeticao, REPETICOES_ATE_PARAR, VEZES_NO_CICLO } from "./repeticao";
+
+/** Mensagem do botão "Executar de verdade" quando o modelo só escreveu a chamada. */
+const PEDIDO_EXECUTAR =
+  "Você escreveu a chamada de ferramenta como texto na resposta, então nada foi executado. Use as ferramentas de verdade agora (sem reescrever o conteúdo no chat) e confirme o que foi feito.";
 
 interface Sessao {
   id: string;
@@ -110,12 +115,16 @@ class Painel implements vscode.WebviewViewProvider {
   private modo: Modo;
   /** Limites aprendidos e bloqueios: arquivo compartilhado por todas as janelas do VS Code. */
   private uso: uso.Compartilhado = uso.vazio();
-  /** Tokens das últimas 5 h, do servidor (soma todas as janelas, TUI, celular e subagentes). */
+  /** Tokens desde o início da janela de cada cota, do servidor (soma todas as janelas, TUI, celular e subagentes). */
   private gasto: { porModelo: Record<string, number>; porCota: Record<string, number> } = { porModelo: {}, porCota: {} };
   /** Modelo de cada sessão (inclusive subagentes), visto no início de cada passo. */
   private modeloDaSessao = new Map<string, string>();
   /** Para de executar quando o agente repete a mesma chamada várias vezes. */
-  private repeticao = new DetectorRepeticao((sid, ferramenta) => void this.interromperRepeticao(sid, ferramenta));
+  private repeticao = new DetectorRepeticao((sid, ferramenta, motivo) => void this.interromperRepeticao(sid, ferramenta, motivo));
+  /** Texto da resposta em andamento, por sessão, para achar chamada de ferramenta escrita como texto. */
+  private textoDaExecucao = new Map<string, string>();
+  /** Lista de arquivos da pasta para o @arquivo (refeita a cada 20 s no máximo). */
+  private cacheArquivos?: { pasta: string; em: number; lista: string[] };
   private atualizandoUso?: NodeJS.Timeout;
   private relogioUso?: NodeJS.Timeout;
   aoContexto: (usado: number, limite: number, nome?: string) => void = () => {};
@@ -309,11 +318,13 @@ class Painel implements vscode.WebviewViewProvider {
     const sess = await this.svc.req<{ data: Sessao & { revert?: { messageID: string } } }>("GET", `/api/session/${this.atual.id}`).catch(() => undefined);
     if (sess?.data) this.atual = { ...this.atual, ...sess.data };
     const corte = sess?.data?.revert ? msgs.findIndex((m) => m.id === sess.data.revert!.messageID) : -1;
+    // quantos pedidos seus foram desfeitos: a faixa "N desfeitas · Refazer" mostra isso
+    const desfeitas = corte >= 0 ? msgs.slice(corte).filter((m) => m.type === "user").length : 0;
     if (corte >= 0) msgs = msgs.slice(0, corte);
     const ultima = [...msgs].reverse().find((m) => m.type === "assistant" && m.tokens);
     this.usado = contextoUsado(ultima?.tokens);
     this.rodando = msgs.length > 0 && msgs[msgs.length - 1].type !== "idle" && msgs[msgs.length - 1].type !== "assistant";
-    this.post({ tipo: "historico", mensagens: msgs });
+    this.post({ tipo: "historico", mensagens: msgs, desfeitas });
     this.estado();
   }
 
@@ -353,12 +364,35 @@ class Painel implements vscode.WebviewViewProvider {
     } catch {}
   }
 
-  /** Busca no servidor os tokens das últimas 5 h (todas as sessões, de todas as janelas). */
+  /**
+   * Busca no servidor os tokens (todas as sessões, de todas as janelas) desde o
+   * início da janela de cada cota: o reinício diário, quando já é conhecido, ou
+   * as últimas 5 h. Uma consulta por início diferente (quase sempre uma ou duas).
+   */
   private async atualizarUso() {
     this.lerUso();
-    const de = Date.now() - uso.JANELA_MS;
-    const j = await this.svc.req<{ data: any }>("GET", `/api/experimental/session/stats?from=${de}&tools=none`).catch(() => undefined);
-    if (j?.data) this.gasto = uso.somar(j.data.models ?? [], (ref) => this.cotaDe(ref));
+    const agora = Date.now();
+    const inicio = (cota: string) => uso.inicioDaJanela(this.uso.reinicios?.[cota], agora).desde;
+    const cotas = [...new Set(this.modelos.map((m) => this.cotaDe(`${m.providerID}/${m.id}`)))];
+    const inicios = [...new Set([agora - uso.JANELA_MS, ...cotas.map(inicio)])];
+    const somas = new Map<number, ReturnType<typeof uso.somar>>();
+    await Promise.all(
+      inicios.map(async (de) => {
+        const j = await this.svc.req<{ data: any }>("GET", `/api/experimental/session/stats?from=${de}&tools=none`).catch(() => undefined);
+        if (j?.data) somas.set(de, uso.somar(j.data.models ?? [], (ref) => this.cotaDe(ref)));
+      }),
+    );
+    if (somas.size) {
+      // cada cota (e cada modelo dela) usa a soma que começa no seu próprio início
+      const gasto: typeof this.gasto = { porModelo: {}, porCota: {} };
+      const de = (ref: string) => somas.get(inicio(this.cotaDe(ref)));
+      for (const c of cotas) gasto.porCota[c] = somas.get(inicio(c))?.porCota[c] ?? 0;
+      for (const m of this.modelos) {
+        const ref = `${m.providerID}/${m.id}`;
+        gasto.porModelo[ref] = de(ref)?.porModelo[ref] ?? 0;
+      }
+      this.gasto = gasto;
+    }
     this.estado();
   }
 
@@ -389,13 +423,40 @@ class Painel implements vscode.WebviewViewProvider {
     const sid = d?.sessionID;
     if (!sid) return;
     // Cada execução nova (o usuário mandou outra mensagem) recomeça a contagem.
-    if (t === "session.execution.started") return this.repeticao.zerar(sid);
+    if (t === "session.execution.started") {
+      this.textoDaExecucao.set(sid, "");
+      return this.repeticao.zerar(sid);
+    }
+    if (t === "session.text.delta") {
+      // só o fim importa para achar chamada escrita como texto; guarda até 20 mil caracteres
+      const s = (this.textoDaExecucao.get(sid) ?? "") + (d.delta ?? "");
+      this.textoDaExecucao.set(sid, s.slice(-20_000));
+      return;
+    }
+    if (t === "session.execution.succeeded") {
+      const texto = this.textoDaExecucao.get(sid) ?? "";
+      this.textoDaExecucao.delete(sid);
+      if (sid === this.atual?.id && chamadaEmTexto(texto)) this.avisarChamadaEmTexto();
+      return;
+    }
+    if (t.startsWith("session.execution.")) return void this.textoDaExecucao.delete(sid);
     if (t !== "session.tool.called") return;
     this.repeticao.ferramenta(sid, d.name, d.input);
   }
 
-  /** O agente repetiu a mesma chamada: interrompe e explica, em vez de deixar rodando. */
-  private async interromperRepeticao(sid: string, ferramenta: string) {
+  /** O modelo escreveu a chamada de ferramenta na resposta em vez de chamá-la: nada foi executado. */
+  private avisarChamadaEmTexto() {
+    this.post({
+      tipo: "aviso",
+      nivel: "erro",
+      texto:
+        "O agente escreveu a chamada de ferramenta como texto, então nada foi criado nem executado. Isso costuma acontecer com modelos que não suportam bem ferramentas: peça para executar de verdade ou troque de modelo.",
+      acao: { rotulo: "Executar de verdade", enviar: PEDIDO_EXECUTAR },
+    });
+  }
+
+  /** O agente entrou em loop: interrompe e explica, em vez de deixar rodando. */
+  private async interromperRepeticao(sid: string, ferramenta: string, motivo: MotivoRepeticao) {
     const nome = ferramenta || "ferramenta";
     try {
       await this.svc.req("POST", `/api/session/${sid}/interrupt`, {});
@@ -407,7 +468,10 @@ class Painel implements vscode.WebviewViewProvider {
     this.post({
       tipo: "aviso",
       nivel: "erro",
-      texto: `Parei: o agente repetiu "${nome}" ${REPETICOES_ATE_PARAR + 1} vezes seguidas com a mesma entrada. Isso é loop — reformule o pedido ou dê mais contexto.`,
+      texto:
+        motivo === "seguidas"
+          ? `Parei: o agente repetiu "${nome}" ${REPETICOES_ATE_PARAR + 1} vezes seguidas com a mesma entrada. Isso é loop — reformule o pedido ou dê mais contexto.`
+          : `Parei: o agente voltou ${VEZES_NO_CICLO} vezes à mesma chamada de "${nome}" nas últimas ${JANELA_CICLO} ações, andando em círculo. Reformule o pedido, dê mais contexto ou troque de modelo.`,
     });
   }
 
@@ -569,6 +633,31 @@ class Painel implements vscode.WebviewViewProvider {
         const entrada = this.modelos.find((x) => x.id === (this.atual?.model ?? this.modelo)?.id && x.providerID === (this.atual?.model ?? this.modelo)?.providerID)?.entrada ?? [];
         return this.post({ tipo: "anexos", itens: uris.map((u) => classificar(u.fsPath, entrada)) });
       }
+      case "buscarArquivos": {
+        // @arquivo: lista da pasta (com cache) + ranking; a resposta leva o id para a webview descartar as velhas
+        const caminhos = await this.arquivosDaPasta();
+        return this.post({ tipo: "arquivosAchados", id: m.id, itens: buscar(caminhos, String(m.q ?? "")) });
+      }
+      case "mencionarArquivo": {
+        const pasta = this.pasta();
+        const rel = String(m.rel ?? "");
+        if (!pasta || !rel || rel.includes("..")) return;
+        return this.post({ tipo: "anexos", itens: [classificar(path.join(pasta, rel), this.entradaDoModelo())] });
+      }
+      case "soltar": {
+        // arrastar do Explorer do VS Code (ou do Windows): chegam URIs file://
+        const entrada = this.entradaDoModelo();
+        const itens: Anexo[] = [];
+        for (const u of (Array.isArray(m.uris) ? m.uris : []).slice(0, 20)) {
+          try {
+            const uri = vscode.Uri.parse(String(u));
+            if (uri.scheme === "file" && fs.statSync(uri.fsPath).isFile()) itens.push(classificar(uri.fsPath, entrada));
+          } catch {} // pasta, URI estranha ou arquivo que sumiu: ignora
+        }
+        if (itens.length) this.post({ tipo: "anexos", itens });
+        else this.avisar("Solte arquivos (pastas não são anexadas). Do Explorer do VS Code, segure Shift ao soltar.");
+        return;
+      }
       case "interromper":
         if (this.atual) await this.svc.req("POST", `/api/session/${this.atual.id}/interrupt`, {});
         return;
@@ -590,6 +679,41 @@ class Painel implements vscode.WebviewViewProvider {
     }
   }
 
+  /** Tipos de entrada que o modelo atual lê (para decidir anexo ou caminho). */
+  private entradaDoModelo(): string[] {
+    const m = this.atual?.model ?? this.modelo;
+    return this.modelos.find((x) => x.id === m?.id && x.providerID === m?.providerID)?.entrada ?? [];
+  }
+
+  /** Arquivos da pasta do projeto, relativos e com "/"; refeito no máximo a cada 20 s. */
+  private async arquivosDaPasta(): Promise<string[]> {
+    const pasta = this.pasta();
+    if (!pasta) return [];
+    const c = this.cacheArquivos;
+    if (c && c.pasta === pasta && Date.now() - c.em < 20_000) return c.lista;
+    const base = vscode.Uri.file(pasta);
+    const uris = await vscode.workspace.findFiles(new vscode.RelativePattern(base, "**/*"), "**/{node_modules,.git,target,out,dist}/**", 20_000);
+    const lista = uris.map((u) => path.relative(pasta, u.fsPath).split(path.sep).join("/"));
+    this.cacheArquivos = { pasta, em: Date.now(), lista };
+    return lista;
+  }
+
+  /**
+   * Manda o prompt com os agentes citados com "@" (o OpenCode chama cada um
+   * nesta mensagem). Se o servidor recusar o campo `agents`, manda de novo sem
+   * ele: a menção nunca impede a mensagem de sair (o "@nome" segue no texto).
+   */
+  private async prompt(sid: string, text: string, extra: Record<string, unknown> = {}) {
+    const url = `/api/session/${sid}/prompt`;
+    const agents = mencoesDeAgentes(text, this.agentes.map((a) => a.id));
+    if (!agents.length) return this.svc.req<{ data: any }>("POST", url, { text, ...extra });
+    try {
+      return await this.svc.req<{ data: any }>("POST", url, { text, ...extra, agents });
+    } catch {
+      return this.svc.req<{ data: any }>("POST", url, { text, ...extra });
+    }
+  }
+
   private async enviar(texto: string, anexos: Anexo[] = []): Promise<unknown> {
     texto = texto.trim();
     if (!texto && !anexos.length) return;
@@ -604,7 +728,7 @@ class Painel implements vscode.WebviewViewProvider {
       const final = comCaminhos(texto || "Veja os anexos.", anexos);
       this.rodando = true;
       this.estado();
-      const r = await this.svc.req<{ data: any }>("POST", `/api/session/${s.id}/prompt`, { text: final, files });
+      const r = await this.prompt(s.id, final, { files });
       this.post({ tipo: "eco", mensagem: { id: r.data?.id, type: "user", text: final, anexos: anexos.map((a) => ({ nome: a.nome, modo: a.modo })) } });
       return;
     }
@@ -620,7 +744,7 @@ class Painel implements vscode.WebviewViewProvider {
     if (cmd && this.comandos.some((c) => c.name === cmd[1])) {
       await this.svc.req("POST", `/api/session/${s.id}/command`, { name: cmd[1], text: cmd[2] });
     } else {
-      const r = await this.svc.req<{ data: any }>("POST", `/api/session/${s.id}/prompt`, { text: texto });
+      const r = await this.prompt(s.id, texto);
       this.post({ tipo: "eco", mensagem: { id: r.data?.id, type: "user", text: texto } });
     }
   }

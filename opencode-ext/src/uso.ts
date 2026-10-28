@@ -1,8 +1,14 @@
-// Uso dos modelos numa janela móvel de 5 h.
+// Uso dos modelos desde o último reinício da cota.
 //
 // O USO vem do próprio serviço do OpenCode (/api/experimental/session/stats),
 // que soma todas as sessões: todas as janelas do VS Code, o TUI, o celular e os
 // subagentes. O limite não é publicado e não é adivinhado: só mostramos o usado.
+//
+// DESDE QUANDO: a cota grátis do OpenCode não é uma janela móvel de 5 h; ela
+// reinicia uma vez por dia (as recusas de 26, 27 e 28/10/2026 apontaram todas
+// para 00:00 UTC). O instante exato vem da recusa (recusa + retryAfterMs) e fica
+// guardado em `reinicios`; daí em diante a conta começa no reinício mais recente
+// (o guardado ± dias inteiros). Sem nenhuma recusa ainda, usamos as últimas 5 h.
 //
 // QUANDO VOLTA vem do servidor: a recusa por cota (provider.free-limit,
 // provider.rate-limit, 429) chega com `retryAfterMs`, tirado do cabeçalho
@@ -12,6 +18,7 @@
 // Os bloqueios ficam num arquivo compartilhado entre as janelas.
 
 export const JANELA_MS = 5 * 60 * 60 * 1000;
+export const DIA_MS = 24 * 60 * 60 * 1000;
 
 export interface Bloqueio {
   /** Quando a cota libera (ms). */
@@ -23,16 +30,29 @@ export interface Bloqueio {
 export interface Compartilhado {
   /** Cotas esgotadas, por cota. */
   bloqueios: Record<string, Bloqueio>;
+  /** Um instante em que a cota reiniciou (informado pelo servidor), por cota. */
+  reinicios?: Record<string, number>;
 }
 
 export interface Situacao {
   usado: number;
+  /** Desde quando o uso foi contado (ms). */
+  desde?: number;
+  /** true quando `desde` é o reinício diário informado pelo servidor; false = últimas 5 h. */
+  diaria?: boolean;
   esgotadoAte?: number;
   /** O horário de volta veio do servidor. */
   exato?: boolean;
 }
 
-export const vazio = (): Compartilhado => ({ bloqueios: {} });
+export const vazio = (): Compartilhado => ({ bloqueios: {}, reinicios: {} });
+
+/** Início da contagem: o reinício diário mais recente (se conhecido) ou as últimas 5 h. */
+export function inicioDaJanela(reinicio: number | undefined, agora: number): { desde: number; diaria: boolean } {
+  if (typeof reinicio !== "number" || !Number.isFinite(reinicio)) return { desde: agora - JANELA_MS, diaria: false };
+  const dias = Math.floor((agora - reinicio) / DIA_MS);
+  return { desde: reinicio + dias * DIA_MS, diaria: true };
+}
 
 /** O que conta para a cota: o que entra e o que sai (cache lido não conta). */
 export function tokensDoPasso(t: { input?: number; output?: number; reasoning?: number } | undefined): number {
@@ -88,6 +108,10 @@ export function mesclar(a: Compartilhado, b: Compartilhado, agora: number): Comp
       if (!valido(v) || v.ate <= agora) continue;
       r.bloqueios[k] = melhor(r.bloqueios[k], { ate: v.ate, exato: !!v.exato });
     }
+    // reinícios não vencem: qualquer um serve de referência; fica o mais recente
+    for (const [k, v] of Object.entries(x?.reinicios ?? {})) {
+      if (typeof v === "number" && Number.isFinite(v)) r.reinicios![k] = Math.max(r.reinicios![k] ?? 0, v);
+    }
   }
   return r;
 }
@@ -96,10 +120,13 @@ export function mesclar(a: Compartilhado, b: Compartilhado, agora: number): Comp
 export function marcarLimite(d: Compartilhado, cota: string, b: Bloqueio) {
   // a resposta mais recente do servidor é a verdade: substitui a anterior
   d.bloqueios[cota] = b.exato ? b : melhor(d.bloqueios[cota], b);
+  // a hora em que libera é a hora do reinício: a conta passa a começar nela
+  if (b.exato) (d.reinicios ??= {})[cota] = b.ate;
 }
 
 export function situacao(d: Compartilhado, cota: string, usado: number, agora: number): Situacao {
+  const janela = inicioDaJanela(d.reinicios?.[cota], agora);
   const b = d.bloqueios[cota];
-  if (!b || b.ate <= agora) return { usado };
-  return { usado, esgotadoAte: b.ate, exato: b.exato };
+  if (!b || b.ate <= agora) return { usado, ...janela };
+  return { usado, ...janela, esgotadoAte: b.ate, exato: b.exato };
 }

@@ -45,10 +45,11 @@ test("sem retryAfterMs: estima 5 h e marca como aproximado", () => {
 
 test("situação: só o usado; esgotado com o horário enquanto o bloqueio vale", () => {
   const d = u.vazio();
-  assert.deepStrictEqual(u.situacao(d, "c", 500, 0), { usado: 500 });
+  assert.deepStrictEqual(u.situacao(d, "c", 500, 0), { usado: 500, desde: -u.JANELA_MS, diaria: false });
   u.marcarLimite(d, "c", { ate: 2 * H, exato: true });
-  assert.deepStrictEqual(u.situacao(d, "c", 500, 1 * H), { usado: 500, esgotadoAte: 2 * H, exato: true });
-  assert.deepStrictEqual(u.situacao(d, "c", 500, 2 * H), { usado: 500 });
+  // a recusa exata também ensinou o reinício (2 H): antes dele, a janela começou um dia antes
+  assert.deepStrictEqual(u.situacao(d, "c", 500, 1 * H), { usado: 500, desde: 2 * H - u.DIA_MS, diaria: true, esgotadoAte: 2 * H, exato: true });
+  assert.deepStrictEqual(u.situacao(d, "c", 500, 2 * H), { usado: 500, desde: 2 * H, diaria: true });
 });
 
 test("a resposta nova do servidor substitui a anterior; estimativa não sobrepõe a exata", () => {
@@ -65,5 +66,41 @@ test("mesclar entre janelas: exato vence estimativa, vencido e formato antigo sa
   const b = { bloqueios: { c: { ate: 4 * H, exato: true }, d: { ate: 3 * H, exato: false } } };
   const antigo = { limites: { c: 1000 }, limitesEm: { c: 1 }, bloqueios: { c: 6 * H } };
   const r = u.mesclar(u.mesclar(a, b, 1 * H), antigo, 1 * H);
-  assert.deepStrictEqual(r, { bloqueios: { c: { ate: 4 * H, exato: true }, d: { ate: 3 * H, exato: false } } });
+  assert.deepStrictEqual(r, { bloqueios: { c: { ate: 4 * H, exato: true }, d: { ate: 3 * H, exato: false } }, reinicios: {} });
+});
+
+test("cota diária: a recusa ensina o reinício e a conta passa a começar nele", () => {
+  // recusa real de 28/10/2026 00:15 (BRT): retryAfterMs 74 684 000 → volta 20:59 (00:00 UTC)
+  const recusa = Date.UTC(2026, 9, 28, 3, 15, 9);
+  const d = u.vazio();
+  u.marcarLimite(d, "opencode:gratis", u.liberaEm(74_684_000, recusa));
+  const reinicio = recusa + 74_684_000;
+  assert.strictEqual(d.reinicios["opencode:gratis"], reinicio);
+  // antes de liberar: a janela é o reinício anterior (um dia antes)
+  assert.deepStrictEqual(u.inicioDaJanela(reinicio, recusa), { desde: reinicio - u.DIA_MS, diaria: true });
+  // depois de liberar: começa no próprio reinício, e não pega o uso de antes
+  const depois = reinicio + 30 * 60_000;
+  assert.deepStrictEqual(u.inicioDaJanela(reinicio, depois), { desde: reinicio, diaria: true });
+  // dias depois, continua alinhado ao mesmo horário
+  assert.strictEqual(u.inicioDaJanela(reinicio, depois + 3 * u.DIA_MS).desde, reinicio + 3 * u.DIA_MS);
+  const s = u.situacao(d, "opencode:gratis", 10, depois);
+  assert.strictEqual(s.diaria, true);
+  assert.strictEqual(s.esgotadoAte, undefined);
+});
+
+test("sem reinício conhecido: últimas 5 h; estimativa não vira reinício", () => {
+  const agora = 1_800_000_000_000;
+  assert.deepStrictEqual(u.inicioDaJanela(undefined, agora), { desde: agora - u.JANELA_MS, diaria: false });
+  const d = u.vazio();
+  u.marcarLimite(d, "x/y", u.liberaEm(undefined, agora));
+  assert.strictEqual(d.reinicios["x/y"], undefined);
+});
+
+test("mesclar guarda o reinício mais recente mesmo depois do bloqueio vencer", () => {
+  const a = { bloqueios: {}, reinicios: { c: 100 } };
+  const b = { bloqueios: { c: { ate: 50, exato: true } }, reinicios: { c: 200 } };
+  const r = u.mesclar(a, b, 1000);
+  assert.deepStrictEqual(r.bloqueios, {});
+  assert.deepStrictEqual(r.reinicios, { c: 200 });
+  assert.deepStrictEqual(u.mesclar({ bloqueios: {} }, { bloqueios: {} }, 0).reinicios, {}, "uso.json antigo sem reinicios");
 });

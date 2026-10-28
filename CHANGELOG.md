@@ -1,5 +1,17 @@
 # Changelog
 
+## Extensão Digitama OpenCode 0.5.7 — 28/10/2026
+
+- **`@` na mensagem:** `@` abre a lista de arquivos do projeto e de agentes. O arquivo escolhido vira anexo, com a mesma regra do clipe: vai em `files` ou, se o modelo não lê aquele tipo, pelo caminho. A busca usa a lista do próprio VS Code, sem `node_modules`, `.git`, `target`, `out` e `dist`, e acha também por letras na ordem ("extts" → `extension.ts`). O `@agente` faz o OpenCode chamar aquele agente nesta mensagem, sem trocar o da conversa; se o servidor recusar a menção, a mensagem sai sem ela. Setas, Enter e Tab navegam pela lista. Ideia trazida do OpenChamber (MIT).
+- **Arrastar e soltar** arquivos na caixa de mensagem. Do Explorer do VS Code, segure Shift ao soltar. Pastas não são anexadas.
+- **Fila:** com o agente trabalhando, Enter guarda a mensagem numa faixa "na fila", e ela sai sozinha quando ele terminar. Dá para editar ou tirar da fila. Ctrl+Enter manda na hora. Comandos `/` e `!` não entram na fila.
+- **Faixa depois de `/desfazer`:** mostra "N mensagens desfeitas" com o botão **Refazer**.
+- **Chamada de ferramenta escrita como texto:** alguns modelos "imprimem" a chamada (`[tool_call tool=functions.write](…)`, `<tool_call>`, `{"name":…, "arguments":…}`) e nada é executado. A extensão percebe isso no fim da resposta e avisa, com o botão **Executar de verdade**. Exemplos dentro de bloco de código não contam.
+- **Loop em ciclo:** além de três chamadas iguais seguidas, a execução agora para quando o agente volta 4 vezes à mesma chamada nas últimas 8 (ler → editar → ler → editar…).
+- **Uso desde o reinício da cota:** a cota grátis do OpenCode reinicia uma vez por dia, às 00:00 UTC (20:59 em Brasília), e não numa janela de 5 h; as recusas de 26, 27 e 28/10 apontaram todas para esse horário. A primeira recusa ensina o reinício, e a pílula passa a mostrar "desde 20:59: X". Antes de qualquer recusa, continua mostrando "5 h". O limite segue sem ser adivinhado: entre um dia e outro, a cota acabou com 4 milhões e com 1 milhão de tokens.
+- **Testes:** `test/mencoes.test.js` (ranking e menções), ciclo e chamada escrita como texto em `test/repeticao.test.js`, reinício diário em `test/uso.test.js`. 47 passando.
+- **App (entra no próximo release do Digitama):** o plugin do OpenCode assina os eventos de novo quando a assinatura cai, com espera crescente de 1 s a 30 s. Antes, o pet ficava mudo até reiniciar o OpenCode.
+
 ## Extensão Digitama OpenCode 0.5.6 — 27/10/2026
 
 - **Google Cloud e Firebase nas Conexões:** cartões prontos com estado ao vivo. O Google Cloud mostra a conta ativa e o projeto (`gcloud config get-value project`); o Firebase mostra a conta do `firebase-tools`. "Conectar" roda `gcloud auth login` / `firebase login` no terminal do VS Code; "Instalar" sugere `winget install --id Google.CloudSDK` / `npm i -g firebase-tools`.

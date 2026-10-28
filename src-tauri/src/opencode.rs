@@ -181,25 +181,41 @@ export default {
     const cwd = ctx.location?.directory || "";
     const tools = new Map(); // id da chamada → nome da ferramenta
     const ac = new AbortController();
-    (async () => {
-      for await (const event of ctx.event.subscribe({ signal: ac.signal })) {
-        const type = event?.type || "";
-        const d = event?.data ?? {};
-        const base = { session_id: d.sessionID || d.id || "", cwd: event?.location?.directory || cwd };
-        if (SESSION[type]) fire(SESSION[type], base);
-        else if (type === "permission.asked") void askPet(ctx, base, d); // sem await: o OpenCode segue livre
-        else if (type === "permission.replied") fire("PermissionReplied", { ...base, opencode_request_id: d.requestID || "" });
-        else if (type === "form.created" || type === "session.form.created") {
-          fire("Notification", { ...base, notification_type: "question", message: d.title || "O OpenCode tem uma pergunta para você." });
-        } else if (type === "session.tool.input.started" && d.id) tools.set(d.id, d.name || "");
-        else if (type === "session.tool.called") {
-          fire("PreToolUse", { ...base, tool_name: tools.get(d.id) || d.name || "", tool_input: d.input ?? null });
-        } else if (type === "session.tool.success" || type === "session.tool.failed") {
-          fire(type === "session.tool.success" ? "PostToolUse" : "PostToolUseFailure", { ...base, tool_name: tools.get(d.id) || d.name || "" });
-          tools.delete(d.id);
-        }
+    const onEvent = (event) => {
+      const type = event?.type || "";
+      const d = event?.data ?? {};
+      const base = { session_id: d.sessionID || d.id || "", cwd: event?.location?.directory || cwd };
+      if (SESSION[type]) fire(SESSION[type], base);
+      else if (type === "permission.asked") void askPet(ctx, base, d); // sem await: o OpenCode segue livre
+      else if (type === "permission.replied") fire("PermissionReplied", { ...base, opencode_request_id: d.requestID || "" });
+      else if (type === "form.created" || type === "session.form.created") {
+        fire("Notification", { ...base, notification_type: "question", message: d.title || "O OpenCode tem uma pergunta para você." });
+      } else if (type === "session.tool.input.started" && d.id) tools.set(d.id, d.name || "");
+      else if (type === "session.tool.called") {
+        fire("PreToolUse", { ...base, tool_name: tools.get(d.id) || d.name || "", tool_input: d.input ?? null });
+      } else if (type === "session.tool.success" || type === "session.tool.failed") {
+        fire(type === "session.tool.success" ? "PostToolUse" : "PostToolUseFailure", { ...base, tool_name: tools.get(d.id) || d.name || "" });
+        tools.delete(d.id);
       }
-    })().catch(() => {});
+    };
+    // Se a assinatura de eventos cair (erro ou fim do fluxo), assina de novo com
+    // espera crescente (1 s → 30 s); sem isso o pet ficava mudo até reiniciar o OpenCode.
+    (async () => {
+      let wait = 1000;
+      while (!ac.signal.aborted) {
+        try {
+          for await (const event of ctx.event.subscribe({ signal: ac.signal })) {
+            wait = 1000;
+            try {
+              onEvent(event);
+            } catch {} // um evento estranho não derruba a assinatura
+          }
+        } catch {}
+        if (ac.signal.aborted) break;
+        await new Promise((r) => setTimeout(r, wait));
+        wait = Math.min(wait * 2, 30000);
+      }
+    })();
     return () => ac.abort();
   },
 };

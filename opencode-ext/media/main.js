@@ -90,7 +90,7 @@
   const lista = h("main", { class: "lista", "aria-live": "polite" });
   const pend = h("section", { class: "pend" });
   const sugest = h("div", { class: "sugest", role: "listbox", hidden: true });
-  const texto = h("textarea", { rows: "1", placeholder: "Pergunte ou peça algo…  ( / comandos · ! terminal )", "aria-label": "Mensagem" });
+  const texto = h("textarea", { rows: "1", placeholder: "Pergunte ou peça algo…  ( / comandos · @ arquivos e agentes · ! terminal )", "aria-label": "Mensagem" });
   // agente e modelo: botões com menu próprio (o <select> nativo cortava e encolhia)
   const chipAgente = h("button", { class: "chip", "aria-haspopup": "listbox", onclick: () => abrirMenu("agente") });
   const chipModelo = h("button", { class: "chip", "aria-haspopup": "listbox", onclick: () => abrirMenu("modelo") });
@@ -171,34 +171,164 @@
       chipModelo,
       h("span", { class: "flex" }),
       botao));
-  const compor = h("footer", {}, sugest, menu, caixa, modosEl);
+  // arrastar e soltar: do Explorer do VS Code (Shift ao soltar) chegam URIs; do Windows, arquivos
+  caixa.addEventListener("dragover", (e) => {
+    e.preventDefault();
+    caixa.classList.add("soltando");
+  });
+  caixa.addEventListener("dragleave", () => caixa.classList.remove("soltando"));
+  caixa.addEventListener("drop", (e) => {
+    e.preventDefault();
+    caixa.classList.remove("soltando");
+    const dt = e.dataTransfer;
+    if (!dt) return;
+    const lista = dt.getData("application/vnd.code.uri-list") || dt.getData("text/uri-list") || "";
+    const uris = lista.split(/\r?\n/).map((s) => s.trim()).filter((s) => s && !s.startsWith("#"));
+    if (uris.length) return enviar({ tipo: "soltar", uris });
+    const arquivos = [...(dt.files || [])];
+    if (arquivos.length) void colarArquivos(arquivos);
+  });
+  const compor = h("footer", {}, sugest, menu, desfeitasEl, filaEl, caixa, modosEl);
   app.append(topo, pairBox, aviso, lista, pend, compor);
 
   function autoAltura() {
     texto.style.height = "auto";
     texto.style.height = Math.min(texto.scrollHeight, 200) + "px";
   }
-  function mandar() {
+  // fila: com o agente trabalhando, Enter guarda a mensagem e ela sai sozinha quando ele terminar
+  // (Ctrl+Enter manda na hora, entrando no meio do que ele está fazendo)
+  let fila = [];
+  const filaEl = h("div", { class: "fila", hidden: true });
+  function desenharFila() {
+    filaEl.hidden = !fila.length;
+    filaEl.replaceChildren(
+      h("span", { class: "rot" }, I("chevron", 11), fila.length === 1 ? "1 na fila" : fila.length + " na fila", h("small", {}, " · sai quando o agente terminar")),
+      ...fila.map((f, i) => h("span", { class: "item", title: f.texto },
+        h("span", { class: "nm" }, f.texto || f.anexos.length + " anexo(s)"),
+        h("button", { class: "tira", title: "Editar", "aria-label": "Editar mensagem da fila", onclick: () => {
+          fila.splice(i, 1);
+          texto.value = f.texto;
+          anexos.push(...f.anexos);
+          desenharAnexos();
+          desenharFila();
+          autoAltura();
+          texto.focus();
+        } }, I("pencil", 11)),
+        h("button", { class: "tira", title: "Tirar da fila", "aria-label": "Tirar da fila", onclick: () => (fila.splice(i, 1), desenharFila()) }, I("x", 11)))));
+  }
+  function proximaDaFila() {
+    if (E.rodando || !fila.length) return;
+    const f = fila.shift();
+    desenharFila();
+    enviar({ tipo: "enviar", texto: f.texto, anexos: f.anexos });
+  }
+
+  // faixa depois de um /desfazer: quantos pedidos saíram e o botão para trazer de volta
+  const desfeitasEl = h("div", { class: "desfeitas", hidden: true });
+  function desenharDesfeitas(n) {
+    desfeitasEl.hidden = !n;
+    if (!n) return;
+    desfeitasEl.replaceChildren(I("refresh", 12), h("span", {}, n === 1 ? "1 mensagem desfeita" : n + " mensagens desfeitas"),
+      h("button", { class: "pri pequeno", onclick: () => enviar({ tipo: "enviar", texto: "/refazer", anexos: [] }) }, "Refazer"));
+  }
+
+  function mandar(agora = false) {
     const t = texto.value.trim();
     if (!t && !anexos.length) return;
     texto.value = "";
     autoAltura();
     sugest.hidden = true;
-    enviar({ tipo: "enviar", texto: t, anexos });
+    // comandos (/ e !) sempre vão na hora; mensagem comum espera a vez se o agente estiver ocupado
+    if (E.rodando && !agora && !/^[/!]/.test(t)) {
+      fila.push({ texto: t, anexos });
+      desenharFila();
+    } else enviar({ tipo: "enviar", texto: t, anexos });
     anexos = [];
     desenharAnexos();
   }
+
+  // ── @: arquivos do projeto e agentes ──
+  let sugestModo = null; // "barra" | "arroba"
+  let buscaId = 0;
+  let buscaTimer;
+  /** "@algo" logo antes do cursor (sem espaço no meio). */
+  function arrobaNoCursor() {
+    const ate = texto.value.slice(0, texto.selectionStart);
+    const m = ate.match(/(^|\s)@([^\s@]*)$/);
+    return m ? { q: m[2], ini: ate.length - m[2].length - 1 } : null;
+  }
+  /** Troca o "@algo" do cursor pelo escolhido. */
+  function trocarArroba(por) {
+    const a = arrobaNoCursor();
+    if (!a) return;
+    const fim = texto.selectionStart;
+    texto.value = texto.value.slice(0, a.ini) + por + " " + texto.value.slice(fim);
+    const pos = a.ini + por.length + 1;
+    texto.setSelectionRange(pos, pos);
+    sugest.hidden = true;
+    autoAltura();
+    texto.focus();
+  }
+  function desenharArroba(q, arquivos) {
+    const ql = q.toLowerCase();
+    const agentes = (E.agentes || []).filter((a) => a.mode !== "primary" && (a.id.toLowerCase().includes(ql) || (a.name || "").toLowerCase().includes(ql))).slice(0, 6);
+    const itens = [
+      ...agentes.map((a) => h("button", { role: "option", onclick: () => trocarArroba("@" + a.id) },
+        h("span", { class: "cor", style: a.color ? "background:" + a.color : "" }), h("b", {}, "@" + a.id), a.description ? h("span", {}, a.description) : null, h("em", {}, "agente"))),
+      ...arquivos.map((rel) => {
+        const i = rel.lastIndexOf("/");
+        return h("button", { role: "option", onclick: () => {
+          trocarArroba("@" + rel);
+          enviar({ tipo: "mencionarArquivo", rel });
+        } }, I("file", 14), h("b", {}, rel.slice(i + 1)), i > 0 ? h("span", {}, rel.slice(0, i)) : null);
+      }),
+    ];
+    sugestModo = "arroba";
+    sugest.replaceChildren(...itens);
+    sugest.hidden = !itens.length;
+  }
+
   texto.addEventListener("keydown", (e) => {
+    if (!sugest.hidden && (e.key === "ArrowDown" || e.key === "ArrowUp")) {
+      // setas andam pela lista de sugestões
+      e.preventDefault();
+      const bs = [...sugest.querySelectorAll("button")];
+      const i = bs.indexOf(document.activeElement);
+      bs[e.key === "ArrowDown" ? Math.min(bs.length - 1, i + 1) : Math.max(0, i - 1)]?.focus();
+      return;
+    }
+    if ((e.key === "Enter" || e.key === "Tab") && !e.shiftKey && !sugest.hidden && sugestModo === "arroba") {
+      e.preventDefault();
+      sugest.querySelector("button")?.click();
+      return;
+    }
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       const primeira = !sugest.hidden && sugest.querySelector("button");
-      if (primeira && !texto.value.includes(" ")) primeira.click();
-      else mandar();
+      if (primeira && !texto.value.includes(" ") && !(e.ctrlKey || e.metaKey)) primeira.click();
+      else mandar(e.ctrlKey || e.metaKey);
     } else if (e.key === "Escape") sugest.hidden = true;
+  });
+  // Escape e setas também funcionam com o foco numa sugestão
+  sugest.addEventListener("keydown", (e) => {
+    const bs = [...sugest.querySelectorAll("button")];
+    const i = bs.indexOf(document.activeElement);
+    if (e.key === "ArrowDown") (e.preventDefault(), bs[Math.min(bs.length - 1, i + 1)]?.focus());
+    else if (e.key === "ArrowUp") (e.preventDefault(), i <= 0 ? texto.focus() : bs[i - 1].focus());
+    else if (e.key === "Escape") ((sugest.hidden = true), texto.focus());
   });
   texto.addEventListener("input", () => {
     autoAltura();
     const v = texto.value;
+    const a = arrobaNoCursor();
+    clearTimeout(buscaTimer);
+    if (a) {
+      desenharArroba(a.q, []);
+      const id = ++buscaId;
+      buscaTimer = setTimeout(() => enviar({ tipo: "buscarArquivos", q: a.q, id }), 120);
+      return;
+    }
+    sugestModo = "barra";
     if (!v.startsWith("/") || v.includes(" ")) return (sugest.hidden = true);
     const q = v.slice(1).toLowerCase();
     const todos = [
@@ -228,13 +358,23 @@
     if (u?.esgotadoAte) return h("span", { class: "tag esgotado", title: (u.cota.endsWith(":gratis") ? "Cota grátis compartilhada esgotada" : "Recusou por limite") + (u.exato ? "; o servidor informou que volta às " : "; estimativa: volta por volta das ") + hora(u.esgotadoAte) }, "esgotado até " + (u.exato ? "" : "~") + hora(u.esgotadoAte));
     return m.gratis ? h("span", { class: "tag gratis" }, "grátis") : null;
   }
-  /** "últimas 5 h: 120k": o servidor não publica o limite, então só o usado. */
+  /** Rótulo curto da janela: "desde 20:59" (reinício diário informado pelo servidor) ou "5 h". */
+  function janelaUso(u) {
+    return u.diaria && u.desde ? "desde " + hora(u.desde) : "5 h";
+  }
+  /** Explicação da janela, para os títulos. */
+  function janelaUsoLonga(u) {
+    return u.diaria && u.desde
+      ? "Tokens desde " + hora(u.desde) + ", quando a cota reiniciou (reinício diário informado pelo servidor)"
+      : "Tokens nas últimas 5 h (o horário de reinício da cota aparece depois da primeira recusa)";
+  }
+  /** "desde 20:59: 120k": o servidor não publica o limite, então só o usado. */
   function barraUso(m) {
     const u = usoDe(m);
     if (!u || !u.usado) return null;
     const comp = u.cota && u.cota.endsWith(":gratis");
-    const txt = (comp ? "cota grátis 5 h: " : "últimas 5 h: ") + fmt(u.usado) + (comp && u.usadoModelo ? " · este: " + fmt(u.usadoModelo) : "");
-    return h("span", { class: "uso", "data-faixa": "baixa", title: "Tokens usados nas últimas 5 h (todas as janelas e sessões)" }, txt);
+    const txt = (comp ? "cota grátis " : "") + janelaUso(u) + ": " + fmt(u.usado) + (comp && u.usadoModelo ? " · este: " + fmt(u.usadoModelo) : "");
+    return h("span", { class: "uso", "data-faixa": "baixa", title: janelaUsoLonga(u) + ", todas as janelas e sessões." }, txt);
   }
   function capsDe(m, tam) {
     return (m?.entrada || []).filter((c) => CAPACIDADES[c]).map((c) => h("span", { class: "cap", title: CAPACIDADES[c].rotulo }, I(CAPACIDADES[c].icone, tam)));
@@ -443,8 +583,8 @@
     if (usoEl.hidden) return;
     const comp = u.cota && u.cota.endsWith(":gratis");
     usoEl.dataset.faixa = u.esgotadoAte ? "esgotado" : "baixa";
-    usoEl.replaceChildren(I("zap", 11), u.esgotadoAte ? "esgotado até " + (u.exato ? "" : "~") + hora(u.esgotadoAte) : (comp ? "cota " : "5 h ") + fmt(u.usado));
-    usoEl.title = (comp ? "Cota grátis compartilhada (todos os modelos grátis do provedor), janela de 5 h" : "Uso deste modelo nas últimas 5 h") + (u.esgotadoAte ? (u.exato ? ". Horário de volta informado pelo servidor." : ". Horário de volta estimado (o servidor não informou).") : "") + " Clique para ver por modelo.";
+    usoEl.replaceChildren(I("zap", 11), u.esgotadoAte ? "esgotado até " + (u.exato ? "" : "~") + hora(u.esgotadoAte) : (comp ? "cota " : janelaUso(u) + " ") + fmt(u.usado));
+    usoEl.title = (comp ? "Cota grátis compartilhada (todos os modelos grátis do provedor). " : "Uso deste modelo. ") + janelaUsoLonga(u) + "." + (u.esgotadoAte ? (u.exato ? ". Horário de volta informado pelo servidor." : ". Horário de volta estimado (o servidor não informou).") : "") + " Clique para ver por modelo.";
   }
 
   // tema vindo das Configurações: cor de destaque, densidade e animações
@@ -485,7 +625,7 @@
     const um = usoDe(m);
     chipModelo.dataset.uso = um?.esgotadoAte ? "esgotado" : "";
     if (um?.esgotadoAte) chipModelo.title += " · esgotado até " + hora(um.esgotadoAte);
-    else if (um?.usado) chipModelo.title += " · 5 h: " + fmt(um.usado);
+    else if (um?.usado) chipModelo.title += " · " + janelaUso(um) + ": " + fmt(um.usado);
     if (!menu.hidden) desenharMenu();
 
     botao.replaceChildren(I(E.rodando ? "stop" : "send", 15));
@@ -849,7 +989,7 @@
   let avisoTimer;
   function mostrarAviso(t, nivel = "erro", acao) {
     aviso.dataset.nivel = nivel;
-    const botaoAcao = acao ? h("button", { class: "pri pequeno", onclick: () => ((aviso.hidden = true), acao.menu && abrirMenu(acao.menu)) }, acao.rotulo) : null;
+    const botaoAcao = acao ? h("button", { class: "pri pequeno", onclick: () => ((aviso.hidden = true), acao.menu && abrirMenu(acao.menu), acao.enviar && enviar({ tipo: "enviar", texto: acao.enviar, anexos: [] })) }, acao.rotulo) : null;
     aviso.replaceChildren(...[I(nivel === "ok" ? "check" : "question", 14), h("span", {}, t), botaoAcao, botaoIcone("x", "Fechar", () => ((aviso.hidden = true), clearTimeout(avisoTimer)))].filter(Boolean));
     aviso.hidden = false;
     clearTimeout(avisoTimer);
@@ -858,10 +998,20 @@
 
   window.addEventListener("message", ({ data: m }) => {
     if (m.tipo === "estado") {
+      const estava = E.rodando;
       E = m;
       aplicarTema(m.tema);
       desenharEstado();
-    } else if (m.tipo === "historico") desenharHistorico(m.mensagens);
+      // o agente terminou: a próxima da fila sai (um pouco depois, para o histórico assentar)
+      if (estava && !m.rodando && fila.length) setTimeout(proximaDaFila, 400);
+    } else if (m.tipo === "historico") {
+      desenharHistorico(m.mensagens);
+      desenharDesfeitas(m.desfeitas || 0);
+    } else if (m.tipo === "arquivosAchados") {
+      // só a resposta da busca mais recente vale, e só se o "@" ainda estiver lá
+      const a = arrobaNoCursor();
+      if (m.id === buscaId && a) desenharArroba(a.q, m.itens || []);
+    }
     else if (m.tipo === "eco") {
       lista.querySelector(".vazio")?.remove();
       lista.append(blocoUsuario(m.mensagem.text, m.mensagem.anexos));
