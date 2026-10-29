@@ -51,9 +51,29 @@ export class Player {
 /** Comandos que só existem no terminal interativo (no chat não fazem nada). */
 const TERMINAL_ONLY = new Set(["login", "logout", "config", "vim", "terminal-setup", "exit", "quit", "theme", "ide", "resume", "doctor"]);
 
+/** Comandos do próprio chat (rodam no Digitama, não vão para a IA). */
+export const LOCAL_COMMANDS: Record<string, string> = {
+  novo: "Nova conversa na mesma pasta",
+  print: "Recortar a tela e anexar",
+  anexar: "Escolher arquivos para anexar",
+  parar: "Parar a resposta",
+};
+
+/** Descrições dos comandos do Claude Code mais usados (aparecem antes de a pasta carregar). */
+const KNOWN: Record<string, string> = {
+  compact: "Resumir a conversa para liberar contexto",
+  context: "Ver o uso do contexto",
+  cost: "Custo e tokens da sessão",
+  init: "Criar o CLAUDE.md do projeto",
+  review: "Revisar as mudanças",
+  "security-review": "Revisão de segurança das mudanças",
+  "pr-comments": "Comentários do pull request",
+  "release-notes": "Notas da versão do Claude Code",
+};
+
 export class SlashMenu {
   readonly root = el("div", "slash hidden");
-  private commands: string[] = [];
+  private commands: string[] = [...Object.keys(LOCAL_COMMANDS), ...Object.keys(KNOWN)].sort((a, b) => a.localeCompare(b));
   private shown: string[] = [];
   private index = 0;
 
@@ -82,8 +102,12 @@ export class SlashMenu {
   }
 
   set(list: string[] | null | undefined) {
-    if (list?.length) this.commands = [...new Set(list)].filter((c) => !TERMINAL_ONLY.has(c)).sort((a, b) => a.localeCompare(b));
+    const base = [...Object.keys(LOCAL_COMMANDS), ...(list?.length ? list : Object.keys(KNOWN))];
+    this.commands = [...new Set(base)].filter((c) => !TERMINAL_ONLY.has(c)).sort((a, b) => a.localeCompare(b));
   }
+
+  /** No OpenCode só os comandos do Digitama (os do Claude Code não valem lá). */
+  onlyLocal = false;
 
   get count() {
     return this.commands.length;
@@ -93,9 +117,10 @@ export class SlashMenu {
     const m = /^\/([\w:.-]*)$/.exec(this.input.value);
     if (!m || !this.commands.length) return this.close();
     const q = m[1].toLowerCase();
+    const all = this.onlyLocal ? this.commands.filter((c) => LOCAL_COMMANDS[c]) : this.commands;
     // primeiro os que começam com o que foi digitado, depois os que contêm
-    const starts = this.commands.filter((c) => c.toLowerCase().startsWith(q) || c.split(":").pop()!.toLowerCase().startsWith(q));
-    const rest = this.commands.filter((c) => !starts.includes(c) && c.toLowerCase().includes(q));
+    const starts = all.filter((c) => c.toLowerCase().startsWith(q) || c.split(":").pop()!.toLowerCase().startsWith(q));
+    const rest = all.filter((c) => !starts.includes(c) && c.toLowerCase().includes(q));
     this.shown = [...starts, ...rest].slice(0, 12);
     this.index = 0;
     if (!this.shown.length) return this.close();
@@ -109,7 +134,9 @@ export class SlashMenu {
         const item = el("button", `slash-item${i === this.index ? " on" : ""}`);
         const [plugin, name] = c.includes(":") ? c.split(":") : ["", c];
         item.append(el("b", undefined, `/${name}`));
-        if (plugin) item.append(el("small", undefined, plugin));
+        const desc = LOCAL_COMMANDS[c] ?? KNOWN[c];
+        if (desc || plugin) item.append(el("small", undefined, [desc, plugin].filter(Boolean).join(" · ")));
+        if (LOCAL_COMMANDS[c]) item.classList.add("local");
         item.onmousedown = (e) => {
           e.preventDefault();
           this.pick(c);
@@ -120,8 +147,17 @@ export class SlashMenu {
     (this.root.children[this.index] as HTMLElement | undefined)?.scrollIntoView({ block: "nearest" });
   }
 
+  /** Chamado ao escolher um comando do Digitama (roda na hora). */
+  onLocal: (c: string) => void = () => {};
+
   private pick(c: string | undefined) {
     if (!c) return;
+    if (LOCAL_COMMANDS[c]) {
+      this.input.value = "";
+      this.close();
+      this.onLocal(c);
+      return;
+    }
     this.input.value = `/${c} `;
     this.input.focus();
     this.close();

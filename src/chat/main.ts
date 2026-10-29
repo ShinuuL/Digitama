@@ -24,7 +24,7 @@ import { STAGES, monFor, personaPrompt } from "../shared/lore";
 import { drawMonFit, loadPacks } from "../pet/render";
 import { ClaudeView } from "./claude-view";
 import { bytesOf, fromFile, fromPaste, isBigPaste, sizeText } from "./attachments";
-import { GithubCard, McpPanel, Player, SlashMenu } from "./extras";
+import { GithubCard, LOCAL_COMMANDS, McpPanel, Player, SlashMenu } from "./extras";
 import { esc, md, mdMsg } from "./markdown";
 import { follow, initScroll, toEnd } from "./scroll";
 
@@ -201,6 +201,7 @@ function paintHeader() {
   selectValue($<HTMLSelectElement>("#effort"), state.chatEffort ?? "");
   $<HTMLSelectElement>("#mode").value = state.chatPermissionMode ?? "manual";
   $(".claude-only").classList.toggle("hidden", state.chatProvider !== "claude");
+  slash.onlyLocal = state.chatProvider !== "claude";
   $<HTMLTextAreaElement>("#input").placeholder = `Pergunte ao ${providerName()}…  (Enter envia, Shift+Enter quebra linha)`;
 }
 
@@ -470,12 +471,28 @@ function showUser(text: string, files: { kind: string; name: string; mediaType?:
       a.kind === "image" && a.data ? `<img class="shot" src="data:${a.mediaType};base64,${a.data}" />` : `<span class="att-chip">📎 ${esc(a.name)}</span>`,
     )
     .join("");
-  add("user", `${thumbs}${esc(text)}`);
+  // anexos numa faixa própria; o texto vai embaixo, não ao lado
+  add("user", thumbs ? `<div class="msg-atts">${thumbs}</div>${esc(text)}` : esc(text));
 }
+
+/** Comandos do Digitama no chat (/novo, /print…). */
+function runLocal(c: string) {
+  if (c === "novo") $("#reset").click();
+  else if (c === "print") $("#shot").click();
+  else if (c === "anexar") $("#file").click();
+  else if (c === "parar") $("#stop").click();
+}
+slash.onLocal = runLocal;
 
 async function send() {
   const input = $<HTMLTextAreaElement>("#input");
   let text = input.value.trim();
+  const local = /^\/([\w-]+)$/.exec(text)?.[1];
+  if (local && local in LOCAL_COMMANDS) {
+    input.value = "";
+    runLocal(local);
+    return;
+  }
   if (busy || (!text && !attachments.length)) return;
   const files = attachments;
   if (!text) text = files.some((a) => a.kind === "image") ? "O que você vê nesta imagem? Me ajude com o que estiver aberto." : "Veja o anexo.";

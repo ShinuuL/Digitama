@@ -19,7 +19,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GetCursorPos, GetForegroundWindow, GetWindowLongPtrW, GetWindowRect, GetWindowTextLengthW,
     GetWindowTextW, GetWindowThreadProcessId, IsIconic, IsWindowVisible, SetForegroundWindow, SetWindowPos,
     ShowWindow, GWL_EXSTYLE, HWND_TOPMOST, SWP_ASYNCWINDOWPOS, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOOWNERZORDER,
-    SWP_NOSIZE, SW_RESTORE, WS_EX_TOPMOST,
+    SWP_NOSIZE, SWP_NOZORDER, SW_RESTORE, WS_EX_TOPMOST,
 };
 
 // ── Identidade ───────────────────────────────────────────────────────────────
@@ -170,6 +170,14 @@ pub fn window_visible(raw: isize) -> bool {
 /// O ponto (pixels físicos) está em algum monitor?
 pub fn point_on_screen(x: i32, y: i32) -> bool {
     unsafe { !MonitorFromPoint(POINT { x, y }, MONITOR_DEFAULTTONULL).0.is_null() }
+}
+
+/// Põe a janela exatamente no retângulo (pixels físicos), sem ativá-la.
+pub fn place_window(raw: isize, (x, y, w, h): (i32, i32, i32, i32)) {
+    let flags = SWP_NOACTIVATE | SWP_NOZORDER | SWP_NOOWNERZORDER;
+    unsafe {
+        let _ = SetWindowPos(HWND(raw as *mut _), None, x, y, w, h, flags);
+    }
 }
 
 /// Devolve o "sempre por cima" se o Windows o tirou (sem ativar nem mover).

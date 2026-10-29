@@ -336,6 +336,15 @@ main {
   background: var(--dv-dark);
 }
 /* print/imagem na conversa: miniatura; clicar abre em tamanho real */
+.msg-atts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+.msg-atts > * {
+  margin: 0 !important;
+}
 .msg img.shot {
   display: inline-block;
   vertical-align: top;
@@ -895,6 +904,9 @@ footer {
 .slash-item small {
   color: var(--muted);
   font: 14px var(--dv-body);
+}
+.slash-item.local b {
+  color: var(--dv-gold);
 }
 .slash-item.on,
 .slash-item:hover {

@@ -208,6 +208,20 @@ function draw() {
   }
 }
 
+/** O aviso fica no alto do monitor do cursor (no meio do print caía na emenda). */
+function placeHud() {
+  const m = shot?.monitor;
+  if (!m || !shot) {
+    hud.style.left = "50%";
+    hud.style.top = "18px";
+    return;
+  }
+  const k = W / shot.width;
+  hud.style.left = `${(m[0] + m[2] / 2) * k}px`;
+  hud.style.top = `${m[1] * k + 18}px`;
+  mouse = { x: (m[0] + m[2] / 2) * k, y: (m[1] + m[3] / 2) * k };
+}
+
 function layout() {
   const has = !!sel && sel.w > 4 && sel.h > 4 && !drag;
   tools.classList.toggle("hidden", !has);
@@ -528,6 +542,7 @@ async function load() {
   palette.classList.add("hidden");
   fitCanvas();
   mouse = { x: W / 2, y: H / 2 };
+  placeHud();
   layout();
   scanStart = performance.now();
   draw();
@@ -538,6 +553,7 @@ async function load() {
 
 window.addEventListener("resize", () => {
   fitCanvas();
+  placeHud();
   layout();
   draw();
 });

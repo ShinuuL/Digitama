@@ -267,7 +267,7 @@ fn virtual_screen() -> (i32, i32, i32, i32) {
     }
 }
 
-fn cursor_monitor() -> Result<(i32, i32, i32, i32), String> {
+pub fn cursor_monitor() -> Result<(i32, i32, i32, i32), String> {
     let (cx, cy) = crate::winsys::cursor_pos().unwrap_or((0, 0));
     unsafe {
         let mon = MonitorFromPoint(POINT { x: cx, y: cy }, MONITOR_DEFAULTTONEAREST);

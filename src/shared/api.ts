@@ -118,6 +118,8 @@ export interface Shot {
   png: string;
   width: number;
   height: number;
+  /** Captura: monitor do cursor [x, y, w, h] em pixels do print. */
+  monitor?: [number, number, number, number] | null;
 }
 
 export const api = {

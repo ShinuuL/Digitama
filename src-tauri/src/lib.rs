@@ -41,6 +41,12 @@ struct Attach(Mutex<Option<Value>>);
 /// A tela congelada do recorte estilo Lightshot, enquanto a janela está aberta.
 #[derive(Default)]
 struct Snip(Mutex<Option<Value>>);
+/// Área (pixels físicos) coberta pela captura atual.
+#[derive(Default)]
+struct SnipRect(Mutex<Option<(i32, i32, i32, i32)>>);
+/// Janelas escondidas para o print, que voltam quando a captura aparece.
+#[derive(Default)]
+struct SnipHidden(Mutex<Vec<String>>);
 
 /// Último sinal de vida da página do pet e quantas vezes o vigia já agiu desde
 /// então. O processo do WebView2 pode cair sozinho (falta de memória, driver de
@@ -203,6 +209,7 @@ fn start_hit_poll(app: AppHandle) {
         let mut last_tick = Instant::now();
         let mut last_check = Instant::now();
         let mut was_visible = false;
+        let mut floor: Option<(i32, i32, i32, i32)> = None;
         loop {
             std::thread::sleep(Duration::from_millis(33));
             // Uma volta muito atrasada é o PC saindo da suspensão: a página
@@ -232,8 +239,14 @@ fn start_hit_poll(app: AppHandle) {
                 moved_at = None;
                 app.state::<Store>().update_quiet(|s| s.pos = Some((x, y)));
             }
+            // o trecho do chão que está em algum monitor: o passeio não sai dele
+            if floor != Some((x, y, w, h)) {
+                floor = Some((x, y, w, h));
+                let _ = app.emit_to("pet", "pet-floor", floor_on_screen((x, y, w, h), scale));
+            }
             if last_check.elapsed() > Duration::from_secs(5) {
                 last_check = Instant::now();
+                floor = None; // reenvia: a página pode ter recarregado
                 keep_pet_alive(&app, hwnd, (x, y, w, h));
             }
             let Some((cx, cy)) = winsys::cursor_pos() else { continue };
@@ -254,6 +267,32 @@ fn start_hit_poll(app: AppHandle) {
             }
         }
     });
+}
+
+/// Maior trecho contínuo da linha do chão da janela que está em algum monitor,
+/// em pixels da página (`[esquerda, direita]`).
+fn floor_on_screen((x, y, w, h): (i32, i32, i32, i32), scale: f64) -> [f64; 2] {
+    let feet = y + h - h / 10;
+    let (mut best, mut start) = ((0, w), None::<i32>);
+    let mut best_len = -1;
+    let stepx = 4;
+    let mut dx = 0;
+    while dx <= w {
+        let on = dx < w && winsys::point_on_screen(x + dx, feet);
+        match (on, start) {
+            (true, None) => start = Some(dx),
+            (false, Some(s)) => {
+                if dx - s > best_len {
+                    best_len = dx - s;
+                    best = (s, dx);
+                }
+                start = None;
+            }
+            _ => {}
+        }
+        dx += stepx;
+    }
+    [best.0 as f64 / scale, best.1 as f64 / scale]
 }
 
 /// O que fazia o pet sumir com o app aberto por muito tempo:
@@ -333,22 +372,29 @@ async fn open_snip(app: AppHandle) {
     if !hidden.is_empty() {
         tokio::time::sleep(Duration::from_millis(220)).await;
     }
+    let mon = screen::cursor_monitor().ok();
     let shot = tauri::async_runtime::spawn_blocking(screen::capture_full)
         .await
         .map_err(|e| e.to_string())
         .and_then(|r| r);
-    for w in &hidden {
-        let _ = w.show();
-    }
     let (shot, (x, y, w, h)) = match shot {
         Ok(v) => v,
         Err(e) => {
+            for w in &hidden {
+                let _ = w.show();
+            }
             let _ = app.emit_to("pet", "pet-say", format!("Não consegui tirar o print: {e}"));
             return;
         }
     };
+    // Pet e chat só voltam quando a captura aparece (snip_ready): voltar antes
+    // fazia a tela "piscar" entre o print e a janela do recorte.
+    *app.state::<SnipHidden>().0.lock().unwrap() = hidden.iter().map(|w| w.label().to_string()).collect();
+    // o monitor do cursor, relativo ao print: o aviso fica nele, não na emenda
+    let mon = mon.map(|(mx, my, mw, mh)| json!([mx - x, my - y, mw, mh]));
     *app.state::<Snip>().0.lock().unwrap() =
-        Some(json!({ "png": shot.png_base64, "width": shot.width, "height": shot.height }));
+        Some(json!({ "png": shot.png_base64, "width": shot.width, "height": shot.height, "monitor": mon }));
+    *app.state::<SnipRect>().0.lock().unwrap() = Some((x, y, w, h));
     // A janela já existe (pré-criada escondida): só reposiciona e avisa. A
     // própria página chama `snip_ready` para aparecer quando o print carregou.
     let win = match app.get_webview_window("snip") {
@@ -368,10 +414,22 @@ async fn open_snip(app: AppHandle) {
 /// Estica a janela do recorte sobre a área (pixels físicos). Duas vezes: com
 /// monitores de escalas diferentes, mudar de monitor faz o Windows propor outro
 /// tamanho (DPI novo); a segunda vez já acontece na escala final.
-fn cover(win: &tauri::WebviewWindow, (x, y, w, h): (i32, i32, i32, i32)) {
-    for _ in 0..2 {
-        let _ = win.set_position(PhysicalPosition::new(x, y));
-        let _ = win.set_size(tauri::PhysicalSize::new(w as u32, h as u32));
+fn cover(win: &tauri::WebviewWindow, rect: (i32, i32, i32, i32)) {
+    // Win32 direto: o set_position do Tauri converte pela escala do monitor
+    // atual e, entre monitores de DPI diferentes, a janela ficava deslocada.
+    match win.hwnd() {
+        Ok(h) => {
+            for _ in 0..2 {
+                winsys::place_window(h.0 as isize, rect);
+            }
+        }
+        Err(_) => {
+            let (x, y, w, h) = rect;
+            for _ in 0..2 {
+                let _ = win.set_position(PhysicalPosition::new(x, y));
+                let _ = win.set_size(tauri::PhysicalSize::new(w as u32, h as u32));
+            }
+        }
     }
 }
 
@@ -627,12 +685,27 @@ fn snip_close(app: AppHandle) {
     if let Some(w) = app.get_webview_window("snip") {
         let _ = w.hide();
     }
+    show_snip_hidden(&app);
+}
+
+/// Mostra de novo o pet e o chat escondidos para o print.
+fn show_snip_hidden(app: &AppHandle) {
+    let labels = std::mem::take(&mut *app.state::<SnipHidden>().0.lock().unwrap());
+    for label in labels {
+        if let Some(w) = app.get_webview_window(&label) {
+            let _ = w.show();
+        }
+    }
 }
 
 /// O print novo já está desenhado na página: mostra a janela.
 #[tauri::command]
 fn snip_ready(app: AppHandle) {
     if let Some(w) = app.get_webview_window("snip") {
+        // reposiciona ainda escondida (o Windows pode ter mudado o tamanho pelo DPI)
+        if let Some(rect) = *app.state::<SnipRect>().0.lock().unwrap() {
+            cover(&w, rect);
+        }
         let _ = w.show();
         let _ = w.set_focus();
         let _ = app.emit_to("pet", "pet-flash", ());
@@ -1040,6 +1113,8 @@ pub fn run() {
         .manage(Hit::default())
         .manage(Attach::default())
         .manage(Snip::default())
+        .manage(SnipRect::default())
+        .manage(SnipHidden::default())
         .manage(Alive::default())
         .manage(media::Current::default())
         .manage(sessions::Cache::default())

@@ -51,6 +51,8 @@ let lastActivity = performance.now();
 let posX = 0; // deslocamento horizontal em relação ao centro
 let walked = 0; // distância andada, para o ciclo de passos não "patinar"
 let targetX = 0;
+/** Trecho da janela (px da página) que está dentro de algum monitor. */
+let floor: [number, number] = [0, W];
 let facing = 1;
 let nextWander = performance.now() + 5000;
 let nextIdleLine = performance.now() + 25000;
@@ -513,6 +515,14 @@ function frameInner(now: number) {
     targetX = (Math.random() - 0.5) * (W - box.w - 40);
     nextWander = now + 6000 + Math.random() * 9000;
   }
+  {
+    // nunca andar para fora das telas (parte da janela pode ficar além da borda)
+    const lo = floor[0] - W / 2 + box.w / 2 + 8, hi = floor[1] - W / 2 - box.w / 2 - 8;
+    if (lo <= hi) {
+      targetX = Math.min(hi, Math.max(lo, targetX));
+      if (!anim && (posX < lo - 40 || posX > hi + 40)) posX = Math.min(hi, Math.max(lo, posX));
+    }
+  }
   if (Math.abs(targetX - posX) > 2 && !anim && !sleeping) {
     const speed = stage <= 2 ? 34 : 40 + stage * 4;
     const step = Math.sign(targetX - posX) * speed * dt;
@@ -779,6 +789,7 @@ async function boot() {
     renderMusic();
     wake();
   });
+  await listen<[number, number]>("pet-floor", (e) => (floor = e.payload));
   await listen<string>("pet-say", (e) => say(e.payload, 6));
   // sprites baixados na primeira abertura: troca o desenho em código pelos reais
   await listen("sprites-ready", async () => {
