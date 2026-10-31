@@ -768,6 +768,10 @@ textarea:focus {
 
 /* ── Player no cabeçalho ──────────────────────────────────────────────────── */
 
+/* o player, a busca e o uso ficam no canto direito do cabeçalho */
+.music-search {
+  margin-left: auto;
+}
 .player {
   flex: 1 1 auto;
   min-width: 0;
@@ -814,6 +818,8 @@ textarea:focus {
   flex: none;
 }
 .pl-btn {
+  display: grid;
+  place-items: center;
   width: 24px;
   height: 24px;
   padding: 0;
@@ -1393,4 +1399,39 @@ body[data-theme="brasa"] {
 }
 :is(body[data-theme="noite"], body[data-theme="brasa"]) :is(.conv.on, .sess.on, .conv:hover, .sess:hover, .proj:hover) {
   background: var(--dv-mid);
+}
+
+.music-search {
+  flex: 0 1 170px;
+  min-width: 90px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+  height: 28px;
+  background: rgba(6, 18, 56, 0.6);
+  box-shadow: inset 0 0 0 1px rgba(61, 255, 138, 0.45);
+  color: var(--dv-green);
+}
+.music-search:focus-within {
+  box-shadow: inset 0 0 0 1px var(--dv-green);
+}
+.ms-icon {
+  display: grid;
+  flex: none;
+}
+.music-search input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  font: 12px var(--dv-body);
+}
+@media (max-width: 680px) {
+  .music-search {
+    display: none;
+  }
 }

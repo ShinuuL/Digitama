@@ -1,6 +1,7 @@
 // O balão de fala do pet: falas soltas, e os pedidos dos agentes (Claude Code,
 // OpenCode) — perguntas, permissões de ferramenta e "estou esperando".
 // Clicar no texto leva à janela do agente; os botões respondem direto.
+import { withIcon } from "../shared/svg";
 import { api } from "../shared/api";
 
 export interface Question {
@@ -120,7 +121,8 @@ export class Bubble {
   private renderCurrent() {
     const req = this.current!;
     const name = agentName(req.agent);
-    const goChat = el("button", "ghost", `💬 Responder no ${name}`);
+    const goChat = el("button", "ghost");
+    withIcon(goChat, "chat", `Responder no ${name}`, 12);
     goChat.onclick = () => {
       if ("requestId" in req) void api.hookDecline(req.requestId);
       this.toChat(req.cwd);

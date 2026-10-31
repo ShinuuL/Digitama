@@ -750,6 +750,12 @@ async fn attach_to_chat(app: AppHandle, png: String, width: u32, height: u32) {
     let _ = app.emit_to("chat", "chat-attach", ());
 }
 
+/// Busca de música no Spotify (app ou web).
+#[tauri::command]
+fn media_search(query: String) -> Result<(), String> {
+    media::search(&query)
+}
+
 #[tauri::command]
 fn media_state(current: State<media::Current>) -> media::MediaState {
     current.0.lock().unwrap().clone()
@@ -1213,6 +1219,7 @@ pub fn run() {
             copy_png,
             attach_to_chat,
             media_control,
+            media_search,
             media_state,
             hooks_status,
             hooks_preview,

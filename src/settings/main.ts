@@ -6,6 +6,7 @@ import { listen } from "@tauri-apps/api/event";
 import { api, type PetState, type Usage } from "../shared/api";
 import { usageBlock } from "../shared/usage";
 import { iconImg } from "../shared/icons";
+import { withIcon } from "../shared/svg";
 import { LINES, STAGES, XP_STAGES, monFor, stageForXp, type LineId } from "../shared/lore";
 import { drawMon, drawMonFit, hasPack, loadPacks, monBox, type Pose } from "../pet/render";
 
@@ -84,7 +85,7 @@ $("#pages").innerHTML = `
     </div>
     <div class="dv-bar sp hidden" id="sprites-bar-start"><i style="width:0%"></i></div>
     <div class="row"><button class="dv-btn go" id="onboard-done">Pronto, vamos lá!</button>
-    <span class="muted">Dá para voltar aqui quando quiser pelo hexágono ▶ do Digivice.</span></div>
+    <span class="muted">Dá para voltar aqui quando quiser pelo hexágono do Digivice.</span></div>
   </div>
 </section>
 
@@ -196,7 +197,7 @@ $("#pages").innerHTML = `
   <div class="dv-panel">
     <p>A captura funciona como o Lightshot: a tela congela, você arrasta a área, anota e escolhe <b>copiar</b>, <b>salvar</b> (em Imagens\\Digitama) ou <b>perguntar ao Claude</b>.</p>
     <label class="check"><input type="checkbox" id="prtsc" /> Usar a tecla Print Screen (vale ao reabrir o Digitama)</label>
-    <p class="muted">Sempre disponível também em Ctrl+Alt+Shift+P, no menu do pet e no botão 📷 do chat. Na captura: Ctrl+C copia, Ctrl+S salva, Ctrl+Enter manda ao Claude, Ctrl+Z desfaz, duplo clique copia, Esc sai.</p>
+    <p class="muted">Sempre disponível também em Ctrl+Alt+Shift+P, no menu do pet e no botão da câmera do chat. Na captura: Ctrl+C copia, Ctrl+S salva, Ctrl+Enter manda ao Claude, Ctrl+Z desfaz, duplo clique copia, Esc sai.</p>
     <div class="row"><button class="dv-btn go" id="snipnow">Capturar agora</button></div>
   </div>
 </section>
@@ -363,13 +364,11 @@ let ocPending: boolean | null = null;
 
 async function refreshOpencode() {
   const st = await api.opencodeStatus();
-  const where = st.found ? `✅ ${st.version ?? "OpenCode"} — ${st.found}` : "⚪ OpenCode não encontrado (instale com npm i -g opencode-ai, ou informe o caminho).";
-  $("#ocinfo").textContent = where;
-  $("#ocstatus").textContent = st.foreign
-    ? `⚠️ ${st.path} existe e não é do Digitama — não vou mexer.`
-    : st.installed
-      ? `✅ Plugin instalado${st.upToDate ? "" : " (desatualizado: instale de novo)"} em ${st.path}`
-      : `⚪ Plugin não instalado. ${st.found ? "" : "(OpenCode não encontrado nesta máquina)"}`;
+  if (st.found) withIcon($("#ocinfo"), "ok", `${st.version ?? "OpenCode"} — ${st.found}`);
+  else withIcon($("#ocinfo"), "off", "OpenCode não encontrado (instale com npm i -g opencode-ai, ou informe o caminho).");
+  if (st.foreign) withIcon($("#ocstatus"), "warn", `${st.path} existe e não é do Digitama — não vou mexer.`);
+  else if (st.installed) withIcon($("#ocstatus"), "ok", `Plugin instalado${st.upToDate ? "" : " (desatualizado: instale de novo)"} em ${st.path}`);
+  else withIcon($("#ocstatus"), "off", `Plugin não instalado. ${st.found ? "" : "(OpenCode não encontrado nesta máquina)"}`);
   $("#ck-oc").className = `dot ${st.found ? (st.installed ? "on" : "half") : ""}`;
   $("#ck-oc-text").textContent = st.found ? (st.installed ? "conectado ao pet" : "encontrado — falta instalar o plugin") : "não encontrado (opcional)";
 }
@@ -428,7 +427,7 @@ let usagePending: { install: boolean; fingerprint: string } | null = null;
 
 async function refreshUsage() {
   const on = await api.usageBarStatus();
-  $("#usagestatus").textContent = on ? "✅ Ativo: o pet recebe o uso a cada resposta do Claude Code." : "⚪ Inativo.";
+  withIcon($("#usagestatus"), on ? "ok" : "off", on ? "Ativo: o pet recebe o uso a cada resposta do Claude Code." : "Inativo.");
   $("#usagebox").replaceChildren(usageBlock(usage));
 }
 async function usagePreview(install: boolean) {
@@ -499,7 +498,11 @@ let pending: { install: boolean; fingerprint: string } | null = null;
 
 async function refreshHooks() {
   const s = await api.hooksStatus();
-  $("#hookstatus").textContent = `${s.installed ? "✅ Instalados" : "⚪ Não instalados"} em ${s.settingsPath}${s.hookReady ? "" : " · ⚠️ relay não encontrado (rode npm run hook)"}`;
+  withIcon(
+    $("#hookstatus"),
+    s.hookReady ? (s.installed ? "ok" : "off") : "warn",
+    `${s.installed ? "Instalados" : "Não instalados"} em ${s.settingsPath}${s.hookReady ? "" : " · relay não encontrado (rode npm run hook)"}`,
+  );
   const info = await api.claudeInfo();
   $("#ck-claude").className = `dot ${info.path ? (s.installed ? "on" : "half") : ""}`;
   $("#ck-claude-text").textContent = info.path
@@ -553,7 +556,8 @@ $("#apply").onclick = async () => {
 
 async function refreshClaude() {
   const info = await api.claudeInfo();
-  $("#claudeinfo").textContent = info.path ? `✅ ${info.version ?? "Claude Code"} — ${info.path}` : "⚠️ claude.exe não encontrado. Instale o Claude Code e faça login (claude → /login).";
+  if (info.path) withIcon($("#claudeinfo"), "ok", `${info.version ?? "Claude Code"} — ${info.path}`);
+  else withIcon($("#claudeinfo"), "warn", "claude.exe não encontrado. Instale o Claude Code e faça login (claude → /login).");
 }
 
 $("#mcpcopy").onclick = () => void navigator.clipboard.writeText($("#mcpcmd").textContent ?? "");

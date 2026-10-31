@@ -155,3 +155,10 @@
   opacity: 0.4;
   cursor: default;
 }
+
+/* ícones SVG (src/shared/svg.ts) alinhados ao texto */
+svg.ico {
+  display: inline-block;
+  vertical-align: -0.15em;
+  flex: none;
+}

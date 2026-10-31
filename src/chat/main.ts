@@ -24,7 +24,8 @@ import { STAGES, monFor, personaPrompt } from "../shared/lore";
 import { drawMonFit, loadPacks } from "../pet/render";
 import { ClaudeView } from "./claude-view";
 import { bytesOf, fromFile, fromPaste, isBigPaste, sizeText } from "./attachments";
-import { GithubCard, LOCAL_COMMANDS, McpPanel, Player, SlashMenu } from "./extras";
+import { GithubCard, LOCAL_COMMANDS, McpPanel, MusicSearch, Player, SlashMenu } from "./extras";
+import { svg } from "../shared/svg";
 import { esc, md, mdMsg } from "./markdown";
 import { follow, initScroll, toEnd } from "./scroll";
 
@@ -34,20 +35,20 @@ document.body.innerHTML = `
   <aside id="side">
     <div class="side-head">
       <span class="dv-label">Conversas</span>
-      <button id="conv-new" class="icon" title="Nova conversa (fora dos projetos)">＋</button>
+      <button id="conv-new" class="icon" title="Nova conversa (fora dos projetos)">${svg("plus")}</button>
     </div>
     <div id="convs"></div>
-    <button id="folder" class="dv-btn mini" title="Começar uma conversa trabalhando numa pasta de projeto">📁 Nova conversa numa pasta…</button>
+    <button id="folder" class="dv-btn mini" title="Começar uma conversa trabalhando numa pasta de projeto">${svg("folder")} Nova conversa numa pasta…</button>
     <div class="side-head">
       <span class="dv-label">Sessões · VS Code</span>
-      <button id="side-refresh" class="icon" title="Atualizar a lista">↻</button>
+      <button id="side-refresh" class="icon" title="Atualizar a lista">${svg("refresh")}</button>
     </div>
     <input id="side-search" type="search" placeholder="Buscar sessão ou projeto…" />
     <div id="side-list"><div class="side-empty">Procurando sessões…</div></div>
   </aside>
   <section id="main">
     <header>
-      <button id="side-toggle" class="icon" title="Mostrar/esconder as conversas e sessões">☰</button>
+      <button id="side-toggle" class="icon" title="Mostrar/esconder as conversas e sessões">${svg("menu")}</button>
       <canvas id="avatar" width="56" height="56"></canvas>
       <div class="who"><b id="name"></b><span id="status">pronto</span></div>
       <div id="usage" class="chat-usage hidden"></div>
@@ -59,14 +60,14 @@ document.body.innerHTML = `
     </header>
     <div id="info"></div>
     <main id="log"></main>
-    <button id="jump" class="dv-btn mini hidden" title="Ir para o fim da conversa">↓ novas mensagens</button>
+    <button id="jump" class="dv-btn mini hidden" title="Ir para o fim da conversa">${svg("down")} novas mensagens</button>
     <footer>
       <div id="attachments" class="hidden"></div>
       <textarea id="input" rows="3" placeholder="Pergunte…"></textarea>
       <div class="actions">
-        <button id="file" class="icon" title="Anexar arquivos (imagens, PDF, texto) — ou arraste para cá">📎</button>
-        <button id="shot" class="icon" title="Recortar a tela (Print Screen) e anexar">📷</button>
-        <button id="mic" class="icon" title="Ditar a mensagem (ditado do Windows, Win+H)">🎤</button>
+        <button id="file" class="icon" title="Anexar arquivos (imagens, PDF, texto) — ou arraste para cá">${svg("paperclip")}</button>
+        <button id="shot" class="icon" title="Recortar a tela (Print Screen) e anexar">${svg("camera")}</button>
+        <button id="mic" class="icon" title="Ditar a mensagem (ditado do Windows, Win+H)">${svg("mic")}</button>
         <span class="claude-only">
           <select id="model" title="Modelo">
             <option value="">Modelo padrão</option>
@@ -89,12 +90,12 @@ document.body.innerHTML = `
             <option value="acceptEdits">Aceitar edições</option>
             <option value="plan">Planejar</option>
           </select>
-          <button id="mcp" class="icon wide" title="MCPs e conectores do Claude Code no chat">🔌<small id="mcp-count"></small></button>
+          <button id="mcp" class="icon wide" title="MCPs e conectores do Claude Code no chat">${svg("plug")}<small id="mcp-count"></small></button>
         </span>
-        <button id="theme" class="icon" title="Trocar o tema do chat">🎨</button>
+        <button id="theme" class="icon" title="Trocar o tema do chat">${svg("palette")}</button>
         <label class="toggle" title="A IA responde no papel do seu Digimon"><input type="checkbox" id="persona" /> persona</label>
         <span class="grow"></span>
-        <button id="stop" class="dv-btn warn hidden">■ Parar</button>
+        <button id="stop" class="dv-btn warn hidden">${svg("stop")} Parar</button>
         <button id="send" class="dv-btn go">Enviar</button>
       </div>
       <input id="picker" type="file" multiple hidden />
@@ -132,6 +133,7 @@ $("#theme").onclick = () => {
 
 const player = new Player();
 $("#usage").before(player.root);
+player.root.before(new MusicSearch().root);
 const github = new GithubCard();
 $("#info").after(github.root);
 const slash = new SlashMenu($<HTMLTextAreaElement>("#input"));
@@ -273,8 +275,9 @@ function appendText(id: string, text: string) {
 function chip(id: string, name: string) {
   if (toolChips.has(id)) return;
   toolChips.add(id);
-  const label = name.startsWith("mcp__") ? `🔌 ${name.split("__").slice(1).join(" · ")}` : `🔧 ${name}`;
-  add("tool", esc(label));
+  const mcpTool = name.startsWith("mcp__");
+  const label = mcpTool ? name.split("__").slice(1).join(" · ") : name;
+  add("tool", `${svg(mcpTool ? "plug" : "wrench", 12)} ${esc(label)}`);
 }
 
 type Ev = Record<string, any>;
@@ -395,7 +398,8 @@ function renderAttachments() {
       c.append(info);
       if (a.kind === "text" && a.name.startsWith("colado-")) {
         // desfaz: o texto colado volta para a caixa
-        const back = el("button", "att-btn", "↩");
+        const back = el("button", "att-btn");
+        back.innerHTML = svg("undo", 12);
         back.title = "Colar como texto na mensagem";
         back.onclick = () => {
           const input = $<HTMLTextAreaElement>("#input");
@@ -406,7 +410,8 @@ function renderAttachments() {
         };
         c.append(back);
       }
-      const rm = el("button", "att-btn", "✕");
+      const rm = el("button", "att-btn");
+      rm.innerHTML = svg("close", 12);
       rm.title = "Remover";
       rm.onclick = () => {
         attachments.splice(i, 1);
@@ -468,7 +473,7 @@ $("#log").addEventListener("click", (e) => {
 function showUser(text: string, files: { kind: string; name: string; mediaType?: string; data?: string }[]) {
   const thumbs = files
     .map((a) =>
-      a.kind === "image" && a.data ? `<img class="shot" src="data:${a.mediaType};base64,${a.data}" />` : `<span class="att-chip">📎 ${esc(a.name)}</span>`,
+      a.kind === "image" && a.data ? `<img class="shot" src="data:${a.mediaType};base64,${a.data}" />` : `<span class="att-chip">${svg("paperclip", 12)} ${esc(a.name)}</span>`,
     )
     .join("");
   // anexos numa faixa própria; o texto vai embaixo, não ao lado
@@ -526,10 +531,10 @@ $("#log").addEventListener("click", (e) => {
   }
   void navigator.clipboard.writeText(text).then(
     () => {
-      btn.textContent = "✓";
+      btn.innerHTML = svg("check");
       btn.classList.add("done");
       window.setTimeout(() => {
-        btn.textContent = "⧉";
+        btn.innerHTML = svg("copy");
         btn.classList.remove("done");
       }, 1200);
     },
@@ -648,7 +653,8 @@ function renderConvs() {
       item.dataset.status = c.waiting ? "waiting" : c.busy ? "working" : "idle";
       const top = el("div", "sess-top");
       top.append(el("i", "dot"), el("b", "sess-title", c.title));
-      const close = el("button", "conv-x", "✕");
+      const close = el("button", "conv-x");
+      close.innerHTML = svg("close", 12);
       close.title = c.busy ? "Fechar (para o que ela está fazendo)" : "Fechar esta conversa";
       close.onclick = (e) => {
         e.stopPropagation();
@@ -657,7 +663,9 @@ function renderConvs() {
       top.append(close);
       const doing = c.waiting ? "esperando você" : c.busy ? "trabalhando" : "";
       item.append(top, el("div", "sess-meta", [c.cwd ? folderName(c.cwd) : "fora dos projetos", doing].filter(Boolean).join(" · ")));
-      item.title = c.cwd || "Pasta do Digitama (fora dos projetos)";
+      // parar o mouse mostra o título inteiro (a lista corta com reticências)
+      item.title = `${c.title}
+${c.cwd || "Pasta do Digitama (fora dos projetos)"}`;
       item.onclick = () => void switchTo(c.key);
       return item;
     }),
@@ -788,11 +796,14 @@ function renderSessions() {
   for (const [project, list] of byProject) {
     const open = !!q || openGroups.has(project);
     const head = el("button", `proj${open ? " open" : ""}`);
-    head.append(el("i", "chev", open ? "▾" : "▸"), el("b", undefined, project), el("small", undefined, String(list.length)));
+    const chev = el("i", "chev");
+    chev.innerHTML = svg(open ? "chev-down" : "chev-right", 12);
+    head.append(chev, el("b", undefined, project), el("small", undefined, String(list.length)));
     head.title = list[0]?.cwd ?? project;
     const cwd = list[0]?.cwd;
     if (cwd) {
-      const plus = el("span", "proj-new", "＋");
+      const plus = el("span", "proj-new");
+      plus.innerHTML = svg("plus", 12);
       plus.title = `Nova conversa trabalhando em ${cwd}`;
       plus.onclick = (e) => {
         e.stopPropagation();

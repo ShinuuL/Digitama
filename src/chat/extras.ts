@@ -1,6 +1,7 @@
 // Peças do chat em volta da conversa: o player do Spotify no cabeçalho, o menu
 // de comandos de barra (/watch:watch…), o painel de MCPs e o cartão do GitHub.
 import { api, type Capabilities, type GithubStatus, type MediaState } from "../shared/api";
+import { svg, withIcon } from "../shared/svg";
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string, text?: string) {
   const e = document.createElement(tag);
@@ -11,23 +12,49 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string, text?: 
 
 // ── Player (Spotify ou o player que estiver tocando) ─────────────────────────
 
+/** Caixa de busca de música no cabeçalho: Enter abre a busca no Spotify. */
+export class MusicSearch {
+  readonly root = el("form", "music-search");
+  private input = el("input");
+
+  constructor() {
+    const icon = el("span", "ms-icon");
+    icon.innerHTML = svg("search");
+    this.input.type = "search";
+    this.input.placeholder = "Buscar música…";
+    this.input.title = "Buscar no Spotify (Enter)";
+    this.root.append(icon, this.input);
+    this.root.onsubmit = (e) => {
+      e.preventDefault();
+      const q = this.input.value.trim();
+      if (!q) return;
+      api.mediaSearch(q).then(
+        () => (this.input.value = ""),
+        (err) => (this.input.title = `Não consegui abrir a busca: ${err}`),
+      );
+    };
+  }
+}
+
 export class Player {
   readonly root = el("div", "player hidden");
   private art = el("img", "pl-art");
   private title = el("b");
   private artist = el("small");
-  private toggle = el("button", "pl-btn", "⏯");
+  private toggle = el("button", "pl-btn");
 
   constructor() {
     const info = el("div", "pl-info");
     info.append(this.title, this.artist);
     const controls = el("div", "pl-ctrl");
-    for (const [label, action] of [["⏮", "previous"], ["", "play-pause"], ["⏭", "next"]] as const) {
-      const b = action === "play-pause" ? this.toggle : el("button", "pl-btn", label);
+    for (const action of ["previous", "play-pause", "next"] as const) {
+      const b = action === "play-pause" ? this.toggle : el("button", "pl-btn");
+      if (action !== "play-pause") b.innerHTML = svg(action);
       b.title = { previous: "Anterior", "play-pause": "Tocar/pausar", next: "Próxima" }[action];
       b.onclick = () => void api.media(action);
       controls.append(b);
     }
+    this.toggle.innerHTML = svg("play");
     this.art.alt = "";
     this.root.append(this.art, info, controls);
   }
@@ -39,7 +66,7 @@ export class Player {
     this.root.classList.toggle("paused", !m.playing);
     this.title.textContent = m.title;
     this.artist.textContent = [m.artist, m.isSpotify ? "" : m.source].filter(Boolean).join(" · ");
-    this.toggle.textContent = m.playing ? "⏸" : "▶";
+    this.toggle.innerHTML = svg(m.playing ? "pause" : "play");
     this.art.classList.toggle("hidden", !m.art);
     if (m.art && this.art.src !== m.art) this.art.src = m.art;
     this.root.title = `${m.title}${m.artist ? " — " + m.artist : ""} (${m.source})`;
@@ -113,11 +140,21 @@ export class SlashMenu {
     return this.commands.length;
   }
 
+  /** "/algo" logo antes do cursor, no começo ou no meio da frase. */
+  private token() {
+    const before = this.input.value.slice(0, this.input.selectionStart ?? 0);
+    const m = /(^|\s)\/([\w:.-]*)$/.exec(before);
+    return m ? { q: m[2], start: before.length - m[2].length - 1 } : null;
+  }
+
   private update() {
-    const m = /^\/([\w:.-]*)$/.exec(this.input.value);
-    if (!m || !this.commands.length) return this.close();
-    const q = m[1].toLowerCase();
-    const all = this.onlyLocal ? this.commands.filter((c) => LOCAL_COMMANDS[c]) : this.commands;
+    const t = this.token();
+    if (!t || !this.commands.length) return this.close();
+    const q = t.q.toLowerCase();
+    // os do Digitama só no começo da mensagem; no meio da frase, os do Claude Code (skills)
+    const alone = t.start === 0 && !this.input.value.trim().includes(" ");
+    let all = this.onlyLocal ? this.commands.filter((c) => LOCAL_COMMANDS[c]) : this.commands;
+    if (!alone) all = all.filter((c) => !LOCAL_COMMANDS[c]);
     // primeiro os que começam com o que foi digitado, depois os que contêm
     const starts = all.filter((c) => c.toLowerCase().startsWith(q) || c.split(":").pop()!.toLowerCase().startsWith(q));
     const rest = all.filter((c) => !starts.includes(c) && c.toLowerCase().includes(q));
@@ -158,7 +195,14 @@ export class SlashMenu {
       this.onLocal(c);
       return;
     }
-    this.input.value = `/${c} `;
+    // troca só o "/algo" do cursor: o resto da frase fica
+    const t = this.token();
+    const end = this.input.selectionStart ?? this.input.value.length;
+    const start = t?.start ?? 0;
+    const text = `/${c} `;
+    this.input.value = this.input.value.slice(0, start) + text + this.input.value.slice(t ? end : this.input.value.length);
+    this.input.setSelectionRange(start + text.length, start + text.length);
+    this.input.dispatchEvent(new Event("input"));
     this.input.focus();
     this.close();
   }
@@ -269,15 +313,19 @@ export class GithubCard {
       return a;
     };
     const parts: HTMLElement[] = [link(s.repo, s.url, "gh-repo")];
-    if (s.branch) parts.push(el("span", "gh-branch", `⎇ ${s.branch}`));
+    if (s.branch) {
+      const b = el("span", "gh-branch");
+      withIcon(b, "branch", s.branch, 12);
+      parts.push(b);
+    }
     if (s.pr) {
       const c = s.pr.checks;
       const pr = el("span", "gh-pr");
       pr.append(link(`PR #${s.pr.number}${s.pr.draft ? " (rascunho)" : ""}`, s.pr.url));
       const ci = el("span", `gh-ci${c.fail ? " fail" : c.wait ? " wait" : c.ok ? " ok" : ""}`);
-      ci.textContent = c.fail ? `✗ ${c.fail}` : c.wait ? `⏳ ${c.wait}` : c.ok ? `✓ ${c.ok}` : "";
+      if (c.fail || c.wait || c.ok) withIcon(ci, c.fail ? "close" : c.wait ? "clock" : "check", String(c.fail || c.wait || c.ok), 12);
       ci.title = `CI: ${c.ok} ok, ${c.fail} falharam, ${c.wait} rodando`;
-      if (ci.textContent) pr.append(ci);
+      if (ci.childNodes.length) pr.append(ci);
       pr.title = s.pr.title;
       parts.push(pr);
     } else if (s.branch) {

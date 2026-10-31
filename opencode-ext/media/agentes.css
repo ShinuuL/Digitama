@@ -193,3 +193,20 @@ body[data-arrastando="funcao"] .c-fluxo, body[data-arrastando="modelo"] .c-fluxo
 @keyframes entra { from { opacity: 0; transform: translateY(6px); } }
 @keyframes some { from { opacity: 0; } }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
+
+/* modelos: busca, "só grátis" e seções por provedor (mesmo estilo do menu do chat) */
+.barra-modelos { position: sticky; top: -10px; z-index: 1; display: flex; align-items: center; gap: 6px; margin: -10px -10px 2px; padding: 10px 10px 6px; background: var(--fundo); border-bottom: 1px solid var(--borda); }
+.barra-modelos .lupa { color: var(--suave); display: inline-flex; }
+.barra-modelos .busca { flex: 1; min-width: 0; border: 0; padding: 5px 8px; border-radius: 8px; color: var(--vscode-input-foreground); background: var(--vscode-input-background); box-shadow: inset 0 0 0 1px var(--borda); font: inherit; font-size: 12px; }
+.barra-modelos .busca:focus { outline: none; box-shadow: inset 0 0 0 1.5px var(--ciano); }
+.filtro-gratis { margin-left: auto; flex: none; font: inherit; font-size: 11px; text-transform: none; letter-spacing: 0; padding: 3px 9px; border: 0; border-radius: 999px; cursor: pointer; background: transparent; color: var(--suave); box-shadow: inset 0 0 0 1px var(--borda); }
+.filtro-gratis.ativo { color: var(--verde); background: color-mix(in srgb, var(--verde) 13%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--verde) 50%, transparent); }
+.lista-modelos { display: flex; flex-direction: column; gap: 4px; }
+.secao-prov { display: flex; flex-direction: column; gap: 7px; }
+.secao-prov + .secao-prov { margin-top: 2px; padding-top: 4px; border-top: 1px solid var(--borda); }
+.grupo-prov { display: flex; align-items: center; gap: 7px; padding: 6px 8px; border: 0; border-radius: 8px; cursor: pointer; font: inherit; font-size: 11.5px; background: transparent; color: var(--suave); text-align: left; }
+.grupo-prov:hover { background: var(--cartao2); color: var(--vscode-foreground); }
+.grupo-prov b { color: var(--vscode-foreground); text-transform: uppercase; letter-spacing: 0.05em; font-size: 10.5px; }
+.grupo-prov > .icone { transform: rotate(-90deg); transition: transform 0.2s ease; }
+.grupo-prov.aberto > .icone { transform: none; }
+.grupo-prov .conta { font-size: 10.5px; min-width: 18px; padding: 0 6px; border-radius: 999px; background: var(--cartao2); }

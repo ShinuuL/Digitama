@@ -172,6 +172,7 @@ export const api = {
   copyPng: (png: string) => invoke("copy_png", { png }),
   attachToChat: (png: string, width: number, height: number) => invoke("attach_to_chat", { png, width, height }),
   media: (action: "play-pause" | "next" | "previous") => invoke("media_control", { action }),
+  mediaSearch: (query: string) => invoke("media_search", { query }),
   mediaState: () => invoke<MediaState>("media_state"),
   hooksStatus: () => invoke<{ installed: boolean; settingsPath: string; hookPath: string; hookReady: boolean }>("hooks_status"),
   hooksPreview: (install: boolean) =>

@@ -287,12 +287,18 @@ fn emit(app: &AppHandle, key: &str, mut v: Value) {
 }
 
 /// O título de uma conversa nova: o começo da primeira mensagem.
+/// O título guarda o pedido quase inteiro (a lista corta com reticências e mostra
+/// tudo ao parar o mouse); o balão do pet usa `clip(.., 40)`.
 fn short_title(text: &str) -> String {
+    clip(text, 300)
+}
+
+fn clip(text: &str, max: usize) -> String {
     let one = text.split_whitespace().collect::<Vec<_>>().join(" ");
-    if one.chars().count() <= 40 {
+    if one.chars().count() <= max {
         one
     } else {
-        format!("{}…", one.chars().take(40).collect::<String>().trim_end())
+        format!("{}…", one.chars().take(max).collect::<String>().trim_end())
     }
 }
 
@@ -411,7 +417,7 @@ fn spawn(app: &AppHandle, s: &PetState, prompt: Option<&str>, c: &Conv, fork: bo
                         "control_request" => {
                             if let (Some(id), Some(req)) = (v.get("request_id").and_then(Value::as_str), v.get("request")) {
                                 c.permissions.insert(id.to_string(), req.clone());
-                                let _ = app.emit_to("pet", "chat-ask", c.title.clone());
+                                let _ = app.emit_to("pet", "chat-ask", clip(&c.title, 40));
                             }
                         }
                         "control_cancel_request" => {
@@ -1017,8 +1023,9 @@ mod tests {
     #[test]
     fn titulo_da_conversa_e_o_comeco_da_primeira_mensagem() {
         assert_eq!(short_title("  valide os\nchamados 76661 e 76517 "), "valide os chamados 76661 e 76517");
-        let long = short_title(&"palavra ".repeat(20));
-        assert!(long.ends_with('…') && long.chars().count() <= 41);
+        let long = short_title(&"palavra ".repeat(60));
+        assert!(long.ends_with('…') && long.chars().count() <= 301);
+        assert!(clip(&long, 40).chars().count() <= 41);
     }
 
     #[test]

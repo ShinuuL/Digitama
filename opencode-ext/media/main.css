@@ -394,3 +394,11 @@ body.sem-animacao *, body.sem-animacao *::before, body.sem-animacao *::after { a
 
 /* arrastando arquivos sobre a caixa */
 .caixa.soltando { outline: 1.5px dashed var(--acento); outline-offset: -3px; box-shadow: 0 0 0 4px color-mix(in srgb, var(--acento) 22%, transparent); background: color-mix(in srgb, var(--acento) 6%, var(--vscode-input-background)); }
+/* subagente: o prompt que recebeu e a execução dele, dentro do cartão */
+.tool.sub .sub-prompt { padding: 6px 10px; border-top: 1px solid var(--cartao2); }
+.tool.sub .sub-prompt:empty { display: none; }
+.tool.sub .sub-prompt small { display: block; color: var(--suave); font-weight: 600; margin-bottom: 2px; }
+.tool.sub .sub-exec { margin: 0 6px 6px 12px; padding-left: 8px; border-left: 2px solid var(--cartao2); display: flex; flex-direction: column; gap: 6px; max-height: 420px; overflow-y: auto; }
+.tool.sub .sub-exec:empty { display: none; }
+.tool.sub .sub-exec .msg { margin: 0; }
+.sub-vazio { color: var(--suave); font-size: 11px; padding: 4px 0; }

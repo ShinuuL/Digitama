@@ -8,7 +8,7 @@ import * as vscode from "vscode";
 import { acharOpencode, contextoUsado, Modelo, Modo, Agente, naPasta, regrasDoModo, Servico, Tokens } from "./opencode";
 import { PainelAgentes } from "./painelAgentes";
 import { PainelConfig, Tema, TEMA_PADRAO } from "./painelConfig";
-import { COMANDOS, Comando, lerComando, lerShell } from "./comandos";
+import { COMANDOS, Comando, lerComando, lerShell, skillsCitadas } from "./comandos";
 import * as uso from "./uso";
 import { Anexo, classificar, comCaminhos } from "./anexos";
 import { Atualizador } from "./atualizador";
@@ -198,9 +198,7 @@ class Painel implements vscode.WebviewViewProvider {
         name: c.name ?? c.id,
         description: c.description,
       }));
-      this.provedores = Object.fromEntries(
-        ((await this.svc.req<{ data: any[] }>("GET", "/api/provider" + naPasta(this.pasta())).catch(() => ({ data: [] }))).data ?? []).map((p) => [p.id, p.name ?? p.id]),
-      );
+      this.provedores = await this.svc.provedores(this.pasta()).catch(() => ({}));
       this.skills = ((await this.svc.req<{ data: any[] }>("GET", "/api/skill" + naPasta(this.pasta())).catch(() => ({ data: [] }))).data ?? []).map((k) => ({
         id: k.id,
         name: k.name ?? k.id,
@@ -502,12 +500,37 @@ class Painel implements vscode.WebviewViewProvider {
     });
   }
 
+  /** Pai de cada sessão vista nos eventos (a busca é uma só por sessão, e em ordem). */
+  private paiDe = new Map<string, Promise<{ pai?: string; agente?: string }>>();
+
+  /** Evento de outra sessão: se for subagente da conversa aberta (ou de um subagente dela), vai para o cartão dele. */
+  private eventoDeSubagente(sid: string, e: any) {
+    let p = this.paiDe.get(sid);
+    if (!p) {
+      p = this.svc
+        .req<{ data: Sessao & { parentID?: string } }>("GET", `/api/session/${sid}`)
+        .then((j) => ({ pai: j.data?.parentID, agente: j.data?.agent }))
+        .catch(() => ({}));
+      this.paiDe.set(sid, p);
+    }
+    void p.then(async ({ pai, agente }) => {
+      if (!pai || !this.atual) return;
+      // sobe pela cadeia (subagente de subagente) até achar a conversa aberta
+      let acima: string | undefined = pai;
+      for (let i = 0; acima && i < 5; i++) {
+        if (acima === this.atual.id) return this.post({ tipo: "subEvento", sessao: sid, agente, e });
+        acima = (await this.paiDe.get(acima))?.pai;
+      }
+    });
+  }
+
   private evento(e: any) {
     const t: string = e.type ?? "";
     const sid = e.data?.sessionID;
     this.contarUso(t, e.data);
     this.vigiarRepeticao(t, e.data);
     if (/permission|form/.test(t)) void this.pendencias();
+    if (this.atual && sid && sid !== this.atual.id && /^session\.(step|text|reasoning|tool)\./.test(t)) this.eventoDeSubagente(sid, e);
     if (!this.atual || sid !== this.atual.id) {
       if (t.startsWith("session.") && sid && this.sessoes.some((s) => s.id === sid) && t === "session.execution.succeeded") void this.listar();
       return;
@@ -556,6 +579,12 @@ class Painel implements vscode.WebviewViewProvider {
       }
       case "abrir":
         return this.abrir(m.id);
+      case "subagente": {
+        // a execução de um subagente (sessão filha), para o cartão dele
+        if (typeof m.id !== "string" || !/^ses/.test(m.id)) return;
+        const j = await this.svc.req<{ data: any[] }>("GET", `/api/session/${m.id}/message?limit=200&order=desc`).catch(() => undefined);
+        return this.post({ tipo: "subagente", id: m.id, mensagens: (j?.data ?? []).reverse(), erro: j ? undefined : "não consegui buscar a execução" });
+      }
       case "pair":
         return this.parear();
       case "copiar":
@@ -706,9 +735,12 @@ class Painel implements vscode.WebviewViewProvider {
   private async prompt(sid: string, text: string, extra: Record<string, unknown> = {}) {
     const url = `/api/session/${sid}/prompt`;
     const agents = mencoesDeAgentes(text, this.agentes.map((a) => a.id));
-    if (!agents.length) return this.svc.req<{ data: any }>("POST", url, { text, ...extra });
+    // "/skill" em qualquer ponto da frase carrega a skill nesta mensagem
+    const skills = skillsCitadas(text, this.skills.map((k) => k.id)).map((id) => ({ id }));
+    const mais = { ...(agents.length ? { agents } : {}), ...(skills.length ? { skills } : {}) };
+    if (!agents.length && !skills.length) return this.svc.req<{ data: any }>("POST", url, { text, ...extra });
     try {
-      return await this.svc.req<{ data: any }>("POST", url, { text, ...extra, agents });
+      return await this.svc.req<{ data: any }>("POST", url, { text, ...extra, ...mais });
     } catch {
       return this.svc.req<{ data: any }>("POST", url, { text, ...extra });
     }

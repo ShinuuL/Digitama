@@ -47,6 +47,13 @@ export function lerComando(texto: string): { cmd: Comando; args: string } | unde
   return cmd ? { cmd, args: m[2].trim() } : undefined;
 }
 
+/** As skills citadas como "/id" em qualquer ponto do texto (no começo ou no meio da frase). */
+export function skillsCitadas(texto: string, ids: string[]): string[] {
+  const conhecidas = new Set(ids);
+  const achadas = [...texto.matchAll(/(?:^|\s)\/([\w:.-]+)(?=\s|$|[,.;!?])/g)].map((m) => m[1].replace(/[.:]+$/, "")).filter((id) => conhecidas.has(id));
+  return [...new Set(achadas)];
+}
+
 /** "!git status" roda no terminal da sessão, como no TUI. */
 export function lerShell(texto: string): string | undefined {
   const m = texto.trim().match(/^!\s*(.+)$/s);

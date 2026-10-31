@@ -1,5 +1,6 @@
 // A janela do pet: um canvas transparente sempre por cima, com o Digimon, os
 // efeitos, o balão e um menu. Reage aos hooks do Claude Code, à música e a você.
+import { svg } from "../shared/svg";
 import "../shared/digivice.css";
 import "./pet.css";
 import { listen } from "@tauri-apps/api/event";
@@ -400,12 +401,12 @@ function renderMusic() {
   if (!show || !media) return;
   const title = document.createElement("div");
   title.className = "track";
-  title.textContent = `♪ ${media.title}${media.artist ? " — " + media.artist : ""}`;
+  title.textContent = `${media.title}${media.artist ? " — " + media.artist : ""}`;
   const controls = document.createElement("div");
   controls.className = "row";
-  for (const [label, action] of [["⏮", "previous"], [media.playing ? "⏸" : "▶", "play-pause"], ["⏭", "next"]] as const) {
+  for (const [icon, action] of [["previous", "previous"], [media.playing ? "pause" : "play", "play-pause"], ["next", "next"]] as const) {
     const b = document.createElement("button");
-    b.textContent = label;
+    b.innerHTML = svg(icon, 12);
     b.onclick = () => void api.media(action);
     controls.append(b);
   }

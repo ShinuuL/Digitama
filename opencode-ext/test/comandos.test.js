@@ -21,3 +21,11 @@ test("! vira comando de terminal", () => {
   assert.strictEqual(lerShell("! ls -la"), "ls -la");
   assert.strictEqual(lerShell("oi!"), undefined);
 });
+
+test("skills citadas com / no começo ou no meio da frase", () => {
+  const { skillsCitadas } = require("../out/comandos.js");
+  const ids = ["frontend-untitled-m3", "design-critic"];
+  assert.deepEqual(skillsCitadas("/frontend-untitled-m3 crie a tela", ids), ["frontend-untitled-m3"]);
+  assert.deepEqual(skillsCitadas("crie usando /frontend-untitled-m3, depois /design-critic.", ids), ["frontend-untitled-m3", "design-critic"]);
+  assert.deepEqual(skillsCitadas("caminho a/frontend-untitled-m3 e /outra", ids), []);
+});

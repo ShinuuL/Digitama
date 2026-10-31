@@ -324,6 +324,12 @@ export class Servico {
       }));
   }
 
+  /** Nome de cada provedor (opencode → "OpenCode Zen"…), para agrupar os modelos. */
+  async provedores(dir?: string): Promise<Record<string, string>> {
+    const j = await this.req<{ data: any[] }>("GET", "/api/provider" + naPasta(dir));
+    return Object.fromEntries((j.data ?? []).map((p) => [p.id, p.name ?? p.id]));
+  }
+
   async agentes(dir?: string): Promise<Agente[]> {
     const j = await this.req<{ data: any[] }>("GET", "/api/agent" + naPasta(dir));
     const internos = new Set(["compaction", "title", "summary"]);

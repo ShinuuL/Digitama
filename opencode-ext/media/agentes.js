@@ -33,7 +33,7 @@
     sel: salvo.sel ?? "orq",
     soGratis: salvo.soGratis ?? true,
   };
-  let D = { modelos: [], agentes: [], salvos: [], temPasta: true };
+  let D = { modelos: [], agentes: [], provedores: {}, salvos: [], temPasta: true };
   let previa = null;
 
   const guardar = () => vs.setState(S);
@@ -175,17 +175,64 @@
     return coluna("c-funcoes", "users", "Funções", FUNCOES.length, null, h("p", { class: "dica" }, "Arraste para o fluxo (ou Enter)."), ...funcoes);
   }
 
-  function colModelos() {
-    const ms = D.modelos.filter((m) => !S.soGratis || m.gratis);
-    const modelos = ms.map((m) => {
-      const ref = `${m.providerID}/${m.id}`;
-      const el = h("div", { class: "peca modelo", title: descreverModelo(m), tabindex: "0" }, h("span", { class: "bolinha m" }, I("brain", 14)),
-        h("div", {}, h("b", {}, m.name), h("div", { class: "badges" }, ...badges(m, true))));
-      arrastavel(el, "modelo", ref);
-      return el;
+  // ── modelos: busca + seções por provedor (recolhíveis) + "só grátis", como no chat ──
+  const nomeProvedor = (id) => (D.provedores || {})[id] || id.replace(/(^|[-_])(\w)/g, (_, s, c) => (s ? " " : "") + c.toUpperCase());
+  let buscaModelo = ""; // não vai para o estado salvo: a busca recomeça ao abrir
+  /** Provedores agrupados: os com grátis primeiro; dentro, grátis antes dos pagos. */
+  function gruposDeModelos(soGratis, q) {
+    const grupos = new Map();
+    for (const m of D.modelos) {
+      if (soGratis && !m.gratis) continue;
+      if (q && !`${m.name} ${m.id} ${nomeProvedor(m.providerID)}`.toLowerCase().includes(q)) continue;
+      (grupos.get(m.providerID) || grupos.set(m.providerID, []).get(m.providerID)).push(m);
+    }
+    for (const ms of grupos.values()) ms.sort((a, b) => b.gratis - a.gratis || a.name.localeCompare(b.name));
+    return [...grupos.entries()].sort(([a, x], [b, y]) => y.some((m) => m.gratis) - x.some((m) => m.gratis) || nomeProvedor(a).localeCompare(nomeProvedor(b)));
+  }
+  function pecaModelo(m) {
+    const el = h("div", { class: "peca modelo", title: descreverModelo(m), tabindex: "0" }, h("span", { class: "bolinha m" }, I("brain", 14)),
+      h("div", {}, h("b", {}, m.name), h("div", { class: "badges" }, ...badges(m, true))));
+    arrastavel(el, "modelo", `${m.providerID}/${m.id}`);
+    return el;
+  }
+  function listaDeModelos() {
+    const q = buscaModelo.trim().toLowerCase();
+    const grupos = gruposDeModelos(S.soGratis, q);
+    S.secoes = S.secoes && typeof S.secoes === "object" ? S.secoes : {};
+    const secoes = grupos.map(([p, ms], i) => {
+      // buscando: tudo aberto. Senão vale o seu clique; sem clique, abre só o primeiro (o que tem grátis)
+      const aberto = !!q || (p in S.secoes ? S.secoes[p] : i === 0);
+      const nGratis = ms.filter((m) => m.gratis).length;
+      const cab = h("button", { class: "grupo-prov" + (aberto ? " aberto" : ""), "aria-expanded": String(aberto), title: aberto ? "Recolher" : "Mostrar modelos",
+        onclick: () => {
+          if (q) return;
+          S.secoes[p] = !aberto;
+          guardar();
+          redesenharModelos();
+        } }, I("chevron", 12), h("b", {}, nomeProvedor(p)), h("span", { class: "conta" }, ms.length), nGratis ? h("span", { class: "badge gratis" }, nGratis + " grátis") : null);
+      return h("div", { class: "secao-prov" }, cab, ...(aberto ? ms.map(pecaModelo) : []));
     });
-    const filtro = h("label", { class: "filtro" }, h("input", { type: "checkbox", checked: S.soGratis || undefined, onchange: (e) => ((S.soGratis = e.target.checked), mudou()) }), "só grátis");
-    return coluna("c-modelos", "brain", "Modelos", ms.length, filtro, h("p", { class: "dica" }, "Solte sobre uma etapa para usar o modelo nela."), ...modelos);
+    return secoes.length ? secoes : [h("p", { class: "dica" }, q ? `Nenhum modelo com "${buscaModelo}".` : "Nenhum modelo grátis.")];
+  }
+  let listaModelosEl = null;
+  /** Redesenha só a lista: a caixa de busca continua com o foco. */
+  function redesenharModelos() {
+    if (listaModelosEl) listaModelosEl.replaceChildren(...listaDeModelos());
+  }
+  function colModelos() {
+    const filtro = h("button", { class: "filtro-gratis" + (S.soGratis ? " ativo" : ""), role: "switch", "aria-checked": String(!!S.soGratis),
+      onclick: (e) => {
+        S.soGratis = !S.soGratis;
+        e.currentTarget.classList.toggle("ativo", S.soGratis);
+        e.currentTarget.setAttribute("aria-checked", String(S.soGratis));
+        guardar();
+        redesenharModelos();
+      } }, "só grátis");
+    const busca = h("div", { class: "barra-modelos" }, h("span", { class: "lupa" }, I("search", 13)),
+      h("input", { type: "text", class: "busca", placeholder: "Buscar modelo ou provedor…", "aria-label": "Buscar modelo", value: buscaModelo,
+        oninput: (e) => ((buscaModelo = e.target.value), redesenharModelos()) }));
+    listaModelosEl = h("div", { class: "lista-modelos" }, ...listaDeModelos());
+    return coluna("c-modelos", "brain", "Modelos", D.modelos.length, filtro, busca, h("p", { class: "dica" }, "Solte sobre uma etapa para usar o modelo nela."), listaModelosEl);
   }
 
   function cartaoOrq() {
@@ -260,10 +307,11 @@
   function seletorModelo(valor, aoMudar) {
     const sel = h("select", { onchange: (e) => aoMudar(e.target.value) },
       h("option", { value: "" }, "Modelo padrão do OpenCode"),
-      ...["Grátis", "Outros"].map((g) => {
-        const ms = D.modelos.filter((m) => (g === "Grátis") === m.gratis);
-        return ms.length ? h("optgroup", { label: g }, ...ms.map((m) => h("option", { value: `${m.providerID}/${m.id}` }, m.name))) : null;
-      }).filter(Boolean));
+      // por provedor, com os grátis de cada um separados dos pagos
+      ...gruposDeModelos(false, "").flatMap(([p, ms]) =>
+        [[" · grátis", ms.filter((m) => m.gratis)], ["", ms.filter((m) => !m.gratis)]]
+          .filter(([, lista]) => lista.length)
+          .map(([sufixo, lista]) => h("optgroup", { label: nomeProvedor(p) + sufixo }, ...lista.map((m) => h("option", { value: `${m.providerID}/${m.id}` }, m.name))))));
     sel.value = (valor || "").split("#")[0];
     return sel;
   }

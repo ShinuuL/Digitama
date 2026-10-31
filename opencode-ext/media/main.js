@@ -257,6 +257,12 @@
     const m = ate.match(/(^|\s)@([^\s@]*)$/);
     return m ? { q: m[2], ini: ate.length - m[2].length - 1 } : null;
   }
+  /** "/algo" logo antes do cursor: no começo (comandos) ou no meio da frase (skills). */
+  function barraNoCursor() {
+    const ate = texto.value.slice(0, texto.selectionStart);
+    const m = ate.match(/(^|\s)\/([^\s/]*)$/);
+    return m ? { q: m[2], ini: ate.length - m[2].length - 1 } : null;
+  }
   /** Troca o "@algo" do cursor pelo escolhido. */
   function trocarArroba(por) {
     const a = arrobaNoCursor();
@@ -297,7 +303,7 @@
       bs[e.key === "ArrowDown" ? Math.min(bs.length - 1, i + 1) : Math.max(0, i - 1)]?.focus();
       return;
     }
-    if ((e.key === "Enter" || e.key === "Tab") && !e.shiftKey && !sugest.hidden && sugestModo === "arroba") {
+    if ((e.key === "Enter" || e.key === "Tab") && !e.shiftKey && !sugest.hidden && (sugestModo === "arroba" || (sugestModo === "barra" && barraNoCursor()))) {
       e.preventDefault();
       sugest.querySelector("button")?.click();
       return;
@@ -329,20 +335,33 @@
       return;
     }
     sugestModo = "barra";
-    if (!v.startsWith("/") || v.includes(" ")) return (sugest.hidden = true);
-    const q = v.slice(1).toLowerCase();
-    const todos = [
-      ...(E.locais || []).map((c) => ({ nome: c.nome, desc: c.descricao, icone: c.icone, args: c.args, apelidos: c.apelidos })),
-      ...E.comandos.map((c) => ({ nome: c.name, desc: c.description, icone: "tool", args: "", apelidos: [], servidor: true })),
-      ...(E.skills || []).map((k) => ({ nome: "skill " + k.id, desc: k.description, icone: "sparkle", args: "<mensagem>", apelidos: [] })),
-    ];
-    const achados = todos.filter((c) => c.nome.startsWith(q) || c.apelidos.some((a) => a.startsWith(q))).slice(0, 12);
+    const b = barraNoCursor();
+    if (!b) return (sugest.hidden = true);
+    const q = b.q.toLowerCase();
+    // no começo valem todos; no meio da frase só as skills (o resto só funciona no início)
+    const noInicio = b.ini === 0 && !v.slice(0, texto.selectionStart).includes(" ");
+    const skills = (E.skills || []).map((k) => ({ nome: k.id, desc: k.description, icone: "sparkle", args: "", apelidos: [], skill: true }));
+    const todos = noInicio
+      ? [
+          ...(E.locais || []).map((c) => ({ nome: c.nome, desc: c.descricao, icone: c.icone, args: c.args, apelidos: c.apelidos })),
+          ...E.comandos.map((c) => ({ nome: c.name, desc: c.description, icone: "tool", args: "", apelidos: [], servidor: true })),
+          ...skills,
+        ]
+      : skills;
+    const comeca = todos.filter((c) => c.nome.toLowerCase().startsWith(q) || c.apelidos.some((a) => a.startsWith(q)));
+    const contem = todos.filter((c) => !comeca.includes(c) && c.nome.toLowerCase().includes(q));
+    const achados = [...comeca, ...contem].slice(0, 12);
     sugest.replaceChildren(...achados.map((c) => h("button", { role: "option", onclick: () => {
-      texto.value = "/" + c.nome + " ";
+      // troca só o "/algo" do cursor: o resto da frase fica
+      const fim = texto.selectionStart;
+      const por = "/" + c.nome + " ";
+      texto.value = texto.value.slice(0, b.ini) + por + texto.value.slice(fim);
+      texto.setSelectionRange(b.ini + por.length, b.ini + por.length);
       sugest.hidden = true;
+      autoAltura();
       texto.focus();
-      if (!c.args && !c.servidor) mandar();
-    } }, I(c.icone, 14), h("b", {}, "/" + c.nome), c.args ? h("i", {}, c.args) : null, c.desc ? h("span", {}, c.desc) : null, c.servidor ? h("em", {}, "OpenCode") : null)));
+      if (!c.args && !c.servidor && !c.skill) mandar();
+    } }, I(c.icone, 14), h("b", {}, "/" + c.nome), c.args ? h("i", {}, c.args) : null, c.desc ? h("span", {}, c.desc) : null, c.servidor ? h("em", {}, "OpenCode") : c.skill ? h("em", {}, "skill") : null)));
     sugest.hidden = !achados.length;
   });
 
@@ -656,19 +675,45 @@
     const v = input.command ?? input.path ?? input.filePath ?? input.pattern ?? input.url ?? input.query ?? input.description ?? input.agent ?? Object.values(input)[0];
     return String(typeof v === "object" ? JSON.stringify(v) : v ?? "").replace(/\s+/g, " ").slice(0, 140);
   }
+  const SUBAGENTE = new Set(["subagent", "task"]);
   function toolEl(t) {
     const el = h("details", { class: "tool", "data-st": t.state?.status || "streaming" },
       h("summary", {}, h("span", { class: "st" }), I(ICONE_TOOL[t.name] || "tool", 13), h("span", { class: "nome" }, NOMES_TOOL[t.name] || t.name || "ferramenta"), h("span", { class: "arg" })));
+    if (SUBAGENTE.has(t.name)) virarSubagente(el);
     preencherTool(el, t.state);
     return el;
+  }
+  // Subagente: o cartão mostra o prompt que ele recebeu e a execução dele (a
+  // sessão filha), ao vivo enquanto roda ou buscada ao abrir depois.
+  function virarSubagente(el) {
+    if (el._exec) return;
+    el.classList.add("sub");
+    el._prompt = h("div", { class: "sub-prompt" });
+    el._exec = h("div", { class: "sub-exec" });
+    el.append(el._prompt, el._exec);
+    el.addEventListener("toggle", () => {
+      if (el.open && el.dataset.sessao && !el._carregado) {
+        el._carregado = true;
+        el._exec.replaceChildren(h("div", { class: "sub-vazio" }, "carregando a execução…"));
+        enviar({ tipo: "subagente", id: el.dataset.sessao });
+      }
+    });
   }
   function preencherTool(el, state) {
     if (!state) return;
     el.dataset.st = state.status || el.dataset.st;
     if (state.input) el.querySelector(".arg").textContent = resumo(state.input);
-    const saida = state.error?.message || (state.content || []).map((c) => c.text || "").join("\n");
+    const bruta = (state.content || []).map((c) => c.text || "").join("\n");
+    if (el._exec) {
+      const inp = state.input || {};
+      if (inp.agent) el.dataset.agente = inp.agent;
+      if (inp.prompt) el._prompt.replaceChildren(h("small", {}, "Prompt" + (inp.agent ? " para " + inp.agent : "")), md(inp.prompt));
+      const sid = state.metadata?.sessionID || /<subagent sessionID="([^"]+)"/.exec(bruta)?.[1];
+      if (sid) el.dataset.sessao = sid;
+    }
+    const saida = state.error?.message || bruta.replace(/<\/?subagent[^>]*>\n?/g, "");
     if (saida) {
-      el.querySelector("pre")?.remove();
+      el.querySelector(":scope > pre")?.remove();
       el.append(h("pre", {}, saida.length > 4000 ? saida.slice(0, 4000) + "\n…" : saida));
     }
   }
@@ -745,6 +790,12 @@
   function desenharHistorico(msgs) {
     vivos.clear();
     lista.replaceChildren();
+    montarMensagens(msgs, lista);
+    if (!msgs.length) lista.append(vazio());
+    rolar();
+  }
+
+  function montarMensagens(msgs, alvo, semPedido) {
     // agrupa passos seguidos do mesmo agente numa resposta só
     let ultimoBot = null;
     for (const m of msgs) {
@@ -755,31 +806,30 @@
           ultimoBot.append(...bloco.childNodes);
         } else {
           bloco.dataset.agente = m.agent || "";
-          lista.append(bloco);
+          alvo.append(bloco);
           ultimoBot = bloco;
         }
         continue;
       }
       ultimoBot = null;
-      if (m.type === "user") lista.append(blocoUsuario(m.text ?? m.payload?.text ?? ""));
-      else if (m.type === "compaction") lista.append(h("div", { class: "divisa" }, I("compress", 12), "conversa compactada"));
-      else if (m.type === "shell") lista.append(h("article", { class: "msg bot" }, h("pre", {}, "$ " + (m.command ?? ""))));
-      else if (m.type === "idle" && m.outcome && m.outcome !== "succeeded") lista.append(h("div", { class: "divisa erro" }, "parou: " + m.outcome));
+      // no subagente o pedido é o prompt, que já aparece no topo do cartão
+      if (m.type === "user") { if (!semPedido) alvo.append(blocoUsuario(m.text ?? m.payload?.text ?? "")); }
+      else if (m.type === "compaction") alvo.append(h("div", { class: "divisa" }, I("compress", 12), "conversa compactada"));
+      else if (m.type === "shell") alvo.append(h("article", { class: "msg bot" }, h("pre", {}, "$ " + (m.command ?? ""))));
+      else if (m.type === "idle" && m.outcome && m.outcome !== "succeeded") alvo.append(h("div", { class: "divisa erro" }, "parou: " + m.outcome));
     }
-    if (!msgs.length) lista.append(vazio());
-    rolar();
   }
 
-  function vivo(id, agente, modelo) {
+  function vivo(id, agente, modelo, alvo = lista) {
     let v = vivos.get(id);
     if (!v) {
-      lista.querySelector(".vazio")?.remove();
-      const anterior = lista.lastElementChild;
+      alvo.querySelector(":scope > .vazio, :scope > .sub-vazio")?.remove();
+      const anterior = alvo.lastElementChild;
       if (anterior?.classList.contains("bot") && anterior.dataset.agente === (agente || "")) v = { el: anterior, partes: new Map(), tools: new Map() };
       else {
         const el = h("article", { class: "msg bot" }, cabecalhoBot(agente, nomeModelo(modelo)));
         el.dataset.agente = agente || "";
-        lista.append(el);
+        alvo.append(el);
         v = { el, partes: new Map(), tools: new Map() };
       }
       vivos.set(id, v);
@@ -787,14 +837,29 @@
     return v;
   }
 
-  function evento(e) {
+  // Evento da sessão de um subagente: vai para o cartão dele. O cartão é achado
+  // pela sessão ou, na primeira vez, pelo subagente rodando com o mesmo agente.
+  function eventoDeSubagente(sessao, agente, e) {
+    const cartoes = [...lista.querySelectorAll(".tool.sub")];
+    let el = cartoes.find((c) => c.dataset.sessao === sessao);
+    if (!el) {
+      const livres = cartoes.filter((c) => !c.dataset.sessao && /running|streaming/.test(c.dataset.st));
+      el = livres.find((c) => c.dataset.agente === agente) || livres[0];
+      if (!el) return;
+      el.dataset.sessao = sessao;
+    }
+    el._carregado = true; // já está chegando ao vivo: abrir não busca de novo
+    evento(e, el._exec);
+  }
+
+  function evento(e, alvo = lista) {
     const d = e.data || {};
     const t = e.type;
     const fim = pertoDoFim();
     const id = d.assistantMessageID;
-    if (t === "session.step.started" && id) vivo(id, d.agent, d.model);
+    if (t === "session.step.started" && id) vivo(id, d.agent, d.model, alvo);
     else if (/^session\.(text|reasoning)\.(started|delta|ended)$/.test(t) && id) {
-      const v = vivo(id);
+      const v = vivo(id, undefined, undefined, alvo);
       const chave = t.split(".")[1] + ":" + (d.ordinal ?? 0);
       let p = v.partes.get(chave);
       if (!p) {
@@ -814,20 +879,23 @@
         if (t.endsWith(".ended")) p.classList.remove("corrida");
       }
     } else if (/^session\.tool\./.test(t) && id && d.id) {
-      const v = vivo(id);
+      const v = vivo(id, undefined, undefined, alvo);
       let el = v.tools.get(d.id);
       if (!el) {
         el = toolEl({ name: d.name, state: { status: "streaming" } });
         v.tools.set(d.id, el);
         v.el.append(el);
       }
+      if (d.name && SUBAGENTE.has(d.name)) virarSubagente(el);
       if (d.name) {
         el.querySelector(".nome").textContent = NOMES_TOOL[d.name] || d.name;
         el.querySelector("svg.icone").replaceWith(I(ICONE_TOOL[d.name] || "tool", 13));
       }
       if (t === "session.tool.called") preencherTool(el, { status: "running", input: d.input });
-      else if (/success|completed/.test(t)) preencherTool(el, { status: "completed", content: d.content });
+      else if (/success|completed/.test(t)) preencherTool(el, { status: "completed", content: d.content, metadata: d.metadata });
       else if (/fail|error/.test(t)) preencherTool(el, { status: "error", error: d.error || { message: d.message || "erro" } });
+    } else if (alvo !== lista) {
+      // avisos do subagente não sobem para a conversa
     } else if (t === "session.retry" || t === "session.step.retry") mostrarAviso(`Tentando de novo${d.error?.message ? ": " + d.error.message : ""}`);
     else if (t === "session.execution.failed") mostrarAviso(d.error?.message || "A execução falhou.");
     if (fim) rolar();
@@ -1017,6 +1085,15 @@
       lista.append(blocoUsuario(m.mensagem.text, m.mensagem.anexos));
       rolar();
     } else if (m.tipo === "evento") evento(m.e);
+    else if (m.tipo === "subEvento") eventoDeSubagente(m.sessao, m.agente, m.e);
+    else if (m.tipo === "subagente") {
+      for (const el of lista.querySelectorAll(".tool.sub"))
+        if (el.dataset.sessao === m.id) {
+          el._exec.replaceChildren();
+          montarMensagens(m.mensagens || [], el._exec, true);
+          if (!el._exec.childElementCount) el._exec.append(h("div", { class: "sub-vazio" }, m.erro || "sem passos registrados"));
+        }
+    }
     else if (m.tipo === "pendencias") desenharPendencias(m.permissoes, m.forms);
     else if (m.tipo === "pair") desenharPair(m.url, m.expira);
     else if (m.tipo === "erro") mostrarAviso(m.texto);

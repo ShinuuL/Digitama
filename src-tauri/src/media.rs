@@ -231,8 +231,44 @@ pub fn control(action: &str) -> Result<(), String> {
     op.and_then(|o| o.get()).map(|_| ()).map_err(|e| e.to_string())
 }
 
+/// Busca de música: abre a busca no app do Spotify (`spotify:search:`) ou,
+/// sem o app instalado, no Spotify da web.
+pub fn search(query: &str) -> Result<(), String> {
+    let q = query.split_whitespace().collect::<Vec<_>>().join(" ");
+    if q.is_empty() || q.chars().count() > 200 {
+        return Err("busca vazia ou longa demais".into());
+    }
+    let url = search_url(&q, spotify_installed());
+    std::process::Command::new("explorer.exe").arg(url).spawn().map(|_| ()).map_err(|e| e.to_string())
+}
+
+fn search_url(q: &str, app: bool) -> String {
+    // só letras e números passam crus: o resto vira %XX (nada chega ao shell como comando)
+    let enc: String = q
+        .bytes()
+        .map(|b| if b.is_ascii_alphanumeric() { (b as char).to_string() } else { format!("%{b:02X}") })
+        .collect();
+    if app { format!("spotify:search:{enc}") } else { format!("https://open.spotify.com/search/{enc}") }
+}
+
+/// O app do Spotify registra o protocolo `spotify:` no Windows.
+fn spotify_installed() -> bool {
+    use std::os::windows::process::CommandExt;
+    std::process::Command::new("reg")
+        .args(["query", r"HKCU\Software\Classes\spotify"])
+        .creation_flags(0x0800_0000)
+        .output()
+        .is_ok_and(|o| o.status.success())
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn busca_de_musica_codifica_tudo_que_nao_e_letra_ou_numero() {
+        assert_eq!(super::search_url("Dead or Alive", true), "spotify:search:Dead%20or%20Alive");
+        assert_eq!(super::search_url("a&b\"", false), "https://open.spotify.com/search/a%26b%22");
+    }
+
     use super::*;
 
     #[test]

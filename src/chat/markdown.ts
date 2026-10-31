@@ -3,6 +3,7 @@
 // **negrito**, *itálico* e [links](url). Tudo é escapado antes: nenhum HTML
 // vindo do texto chega à página.
 
+import { svg } from "../shared/svg";
 export function esc(s: string) {
   return s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
 }
@@ -131,8 +132,8 @@ function blocks(text: string) {
 }
 
 /** Botões de copiar (o clique é tratado no chat: copia o bloco ou a mensagem). */
-const COPY_CODE = '<button class="copy" title="Copiar o código">⧉</button>';
-const COPY_MSG = '<button class="copy msg-copy" title="Copiar a mensagem">⧉</button>';
+const COPY_CODE = `<button class="copy" title="Copiar o código">${svg("copy")}</button>`;
+const COPY_MSG = `<button class="copy msg-copy" title="Copiar a mensagem">${svg("copy")}</button>`;
 
 /** Markdown de uma resposta inteira, com o botão de copiar a mensagem. */
 export function mdMsg(src: string): string {

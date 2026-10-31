@@ -84,8 +84,12 @@ export class PainelAgentes {
   private async mensagem(m: any) {
     switch (m.tipo) {
       case "pronto": {
-        const [modelos, agentes] = await Promise.all([this.svc.modelos(this.pasta()), this.svc.agentes(this.pasta())]);
-        return this.post({ tipo: "dados", modelos, agentes, salvos: this.salvos(), temPasta: !!this.pasta() });
+        const [modelos, agentes, provedores] = await Promise.all([
+          this.svc.modelos(this.pasta()),
+          this.svc.agentes(this.pasta()),
+          this.svc.provedores(this.pasta()).catch(() => ({})),
+        ]);
+        return this.post({ tipo: "dados", modelos, agentes, provedores, salvos: this.salvos(), temPasta: !!this.pasta() });
       }
       case "previa":
         return this.post({ tipo: "previa", ...this.previa(m.fluxo, m.destino) });
