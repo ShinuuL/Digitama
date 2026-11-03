@@ -116,7 +116,7 @@ pub fn valid_id(id: &str) -> bool {
     !id.is_empty() && id.len() <= 64 && id.chars().all(|c| c.is_ascii_hexdigit() || c == '-')
 }
 
-fn millis(t: SystemTime) -> u64 {
+pub fn millis(t: SystemTime) -> u64 {
     t.duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
 }
 
@@ -268,6 +268,37 @@ pub fn list(cache: &Cache, live: &Live, days: u64, internal: &Path) -> Vec<Sessi
     out
 }
 
+/// As conversas do chat do Digitama gravadas na pasta dele (`chat_dir`),
+/// sem as cópias do "Continuar aqui" (que vêm do VS Code).
+pub fn list_chat(cache: &Cache, chat_dir: &Path) -> Vec<SessionInfo> {
+    let mut out = Vec::new();
+    let Ok(files) = std::fs::read_dir(projects_dir().join(project_key(chat_dir))) else { return out };
+    let mut cache = cache.0.lock().unwrap();
+    for file in files.flatten() {
+        let path = file.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+            continue;
+        }
+        let Some(id) = path.file_stem().and_then(|s| s.to_str()).map(str::to_string) else { continue };
+        let Ok(info) = file.metadata() else { continue };
+        let old = cache.get(&path).cloned();
+        let m = if old.as_ref().is_some_and(|o| o.len == info.len()) {
+            old.unwrap()
+        } else {
+            let m = meta(&path, info.len(), old);
+            cache.insert(path.clone(), m.clone());
+            m
+        };
+        if m.vscode || m.prompt.is_empty() && m.title.is_empty() {
+            continue;
+        }
+        let title = if m.title.is_empty() { m.prompt.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(80).collect() } else { m.title.clone() };
+        let updated = millis(info.modified().unwrap_or(UNIX_EPOCH));
+        out.push(SessionInfo { id, title, cwd: String::new(), project: String::new(), branch: String::new(), updated, status: String::new() });
+    }
+    out
+}
+
 /// Onde está o transcrito original da sessão `id` (fora das pastas do
 /// Digitama, onde ficam só as cópias).
 pub fn find(id: &str, internal: &Path) -> Option<PathBuf> {
@@ -314,8 +345,21 @@ pub fn tail(path: &Path, n: usize) -> Vec<Message> {
     let Ok(mut file) = File::open(path) else { return vec![] };
     let len = file.metadata().map(|m| m.len()).unwrap_or(0);
     let text = read_range(&mut file, len.saturating_sub(TAIL * 4), TAIL * 4);
+    messages(text.lines().map(str::to_string), n)
+}
+
+/// A conversa inteira (até as últimas `n` falas), lida linha a linha: para
+/// reabrir uma conversa do próprio Digitama.
+pub fn all(path: &Path, n: usize) -> Vec<Message> {
+    use std::io::BufRead;
+    let Ok(file) = File::open(path) else { return vec![] };
+    messages(std::io::BufReader::new(file).lines().map_while(Result::ok), n)
+}
+
+fn messages(lines: impl Iterator<Item = String>, n: usize) -> Vec<Message> {
     let mut out: Vec<Message> = Vec::new();
-    for line in text.lines() {
+    for line in lines {
+        let line = line.as_str();
         let role = if line.starts_with("{\"type\":\"user\"") || line.contains("\"type\":\"user\"") {
             "user"
         } else if line.contains("\"type\":\"assistant\"") {

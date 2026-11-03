@@ -56,6 +56,9 @@ pub struct PetState {
     pub chat_effort: String,
     /// As conversas abertas no chat, para continuarem se o app reabrir.
     pub chat_convs: Vec<SavedConv>,
+    /// Todas as conversas que já tiveram sessão (abertas ou fechadas), para a
+    /// lateral reabrir as antigas. As mais recentes primeiro, até `PAST_MAX`.
+    pub chat_past: Vec<SavedConv>,
     /// Servidores MCP desligados no chat (o nome como aparece em `mcp__<nome>__…`).
     pub chat_mcp_off: Vec<String>,
 }
@@ -88,6 +91,7 @@ impl Default for PetState {
             chat_permission_mode: "manual".into(),
             chat_effort: String::new(),
             chat_convs: Vec::new(),
+            chat_past: Vec::new(),
             chat_mcp_off: Vec::new(),
         }
     }
@@ -105,7 +109,14 @@ pub struct SavedConv {
     pub session: String,
     /// A sessão do VS Code que ela continua (cópia), enquanto não houver `session`.
     pub source: String,
+    /// A sessão do OpenCode desta conversa ("" = nenhuma).
+    pub oc_session: String,
+    /// Quando a conversa teve sessão nova ou mudou de título (ms desde 1970).
+    pub updated: u64,
 }
+
+/// Quantas conversas antigas o state.json guarda.
+pub const PAST_MAX: usize = 200;
 
 pub struct Store {
     pub state: Mutex<PetState>,

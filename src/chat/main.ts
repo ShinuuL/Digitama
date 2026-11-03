@@ -15,6 +15,7 @@ import {
   type MediaState,
   type PetState,
   type SessionInfo,
+  type PastInfo,
   type SessionMessage,
   type Shot,
   type Usage,
@@ -720,6 +721,9 @@ $("#folder").onclick = async () => {
 // ── Sessões do VS Code, por projeto ──────────────────────────────────────────
 
 let sessions: SessionInfo[] = [];
+let past: PastInfo[] = [];
+/** Grupo da lateral com as conversas antigas do Digitama. */
+const PAST_GROUP = "digitama:conversas";
 
 const STATUS: Record<SessionInfo["status"], string> = {
   working: "trabalhando",
@@ -777,6 +781,53 @@ function sessionItem(s: SessionInfo, showProject: boolean) {
   return item;
 }
 
+function pastItem(p: PastInfo) {
+  const item = el("div", "sess");
+  const top = el("div", "sess-top");
+  top.append(el("i", "dot"), el("b", "sess-title", p.title));
+  const meta = [p.project || "chat do Digitama", p.provider === "opencode" ? "OpenCode" : "", ago(p.updated)].filter(Boolean).join(" · ");
+  item.append(top, el("div", "sess-meta", meta));
+  item.title = `${p.title}
+${p.cwd || "Pasta do chat do Digitama"}
+Clique para reabrir e continuar`;
+  item.onclick = () => void reopen(p);
+  return item;
+}
+
+/** Reabre uma conversa antiga do Digitama, no provedor em que ela foi feita. */
+async function reopen(p: PastInfo) {
+  let key: string;
+  try {
+    key = await api.chatReopen(p.id);
+  } catch (e) {
+    add("error", esc(String(e)));
+    return;
+  }
+  if (state.chatProvider !== p.provider) {
+    state.chatProvider = p.provider;
+    void api.patch({ chatProvider: p.provider });
+    paintHeader();
+  }
+  convs = await api.chatList();
+  await switchTo(key);
+  void refreshPast();
+}
+
+let pastTimer: number | undefined;
+/** As conversas antigas mudam quando uma aba fecha ou ganha sessão. */
+function refreshPastSoon() {
+  window.clearTimeout(pastTimer);
+  pastTimer = window.setTimeout(() => void refreshPast(), 500);
+}
+async function refreshPast() {
+  try {
+    past = await api.chatPast();
+    renderSessions();
+  } catch {
+    /* fica a lista de antes */
+  }
+}
+
 function renderSessions() {
   const list = $("#side-list");
   const q = $<HTMLInputElement>("#side-search").value.trim().toLowerCase();
@@ -820,6 +871,23 @@ function renderSessions() {
     parts.push(head);
     if (open) parts.push(...list.map((s) => sessionItem(s, false)));
   }
+  const old = past.filter((p) => !q || `${p.title} ${p.project}`.toLowerCase().includes(q));
+  if (old.length) {
+    const open = !!q || openGroups.has(PAST_GROUP);
+    const head = el("button", `proj${open ? " open" : ""}`);
+    const chev = el("i", "chev");
+    chev.innerHTML = svg(open ? "chev-down" : "chev-right", 12);
+    head.append(chev, el("b", undefined, "Conversas do Digitama"), el("small", undefined, String(old.length)));
+    head.title = "Conversas já fechadas aqui no chat: clique numa para reabrir";
+    head.onclick = () => {
+      if (openGroups!.has(PAST_GROUP)) openGroups!.delete(PAST_GROUP);
+      else openGroups!.add(PAST_GROUP);
+      saveGroups();
+      renderSessions();
+    };
+    parts.push(head);
+    if (open) parts.push(...old.map(pastItem));
+  }
   if (!parts.length) parts.push(el("div", "side-empty", q ? "Nenhuma sessão com esse nome." : "Nenhuma sessão do VS Code nos últimos 7 dias."));
   list.replaceChildren(...parts);
 }
@@ -829,7 +897,7 @@ async function refreshSessions() {
   if (loadingSessions) return;
   loadingSessions = true;
   try {
-    sessions = await api.sessionsList();
+    [sessions, past] = await Promise.all([api.sessionsList(), api.chatPast().catch(() => past)]);
     renderSessions();
   } catch (e) {
     $("#side-list").replaceChildren(el("div", "side-empty", `Não consegui ler as sessões: ${e}`));
@@ -1006,6 +1074,7 @@ async function boot() {
     if (me?.busy && !busy) setBusy(true);
     renderConvs();
     renderSessions();
+    refreshPastSoon();
   });
   await listen<PetState>("state-changed", (e) => {
     state = e.payload;

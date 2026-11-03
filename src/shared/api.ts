@@ -64,6 +64,17 @@ export interface SessionInfo {
   status: "working" | "waiting" | "idle" | "";
 }
 
+/** Uma conversa antiga do próprio Digitama (fechada, ou de antes de reabrir). */
+export interface PastInfo {
+  id: string;
+  title: string;
+  /** "" = a pasta do chat do Digitama. */
+  cwd: string;
+  project: string;
+  provider: "claude" | "opencode";
+  updated: number;
+}
+
 export interface SessionMessage {
   role: "user" | "assistant";
   text: string;
@@ -154,6 +165,9 @@ export const api = {
       conv,
     }),
   sessionsList: () => invoke<SessionInfo[]>("sessions_list"),
+  chatPast: () => invoke<PastInfo[]>("chat_past"),
+  /** Reabre uma conversa antiga numa aba (a que já a tem, ou uma nova). */
+  chatReopen: (id: string) => invoke<string>("chat_reopen", { id }),
   /** Uma conversa continua uma cópia da sessão (`reuse`: a aba atual, se vazia). */
   sessionContinue: (s: { id: string; title: string; project: string; cwd: string }, reuse: string | null) =>
     invoke<{ conv: string; recent: SessionMessage[] }>("session_continue", { id: s.id, title: s.title, project: s.project, cwd: s.cwd, reuse }),

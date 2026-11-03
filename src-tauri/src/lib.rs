@@ -621,6 +621,21 @@ async fn sessions_list(app: AppHandle) -> Vec<sessions::SessionInfo> {
     .unwrap_or_default()
 }
 
+/// As conversas antigas do próprio Digitama (fechadas ou de antes de reabrir).
+#[tauri::command]
+async fn chat_past(app: AppHandle) -> Vec<claude::PastInfo> {
+    tauri::async_runtime::spawn_blocking(move || claude::past(&app)).await.unwrap_or_default()
+}
+
+/// Reabre uma conversa antiga do Digitama numa aba. Devolve a chave.
+#[tauri::command]
+async fn chat_reopen(app: AppHandle, id: String) -> Result<String, String> {
+    if !sessions::valid_id(&id) {
+        return Err("id de sessão inválido".into());
+    }
+    tauri::async_runtime::spawn_blocking(move || claude::reopen(&app, &id)).await.map_err(|e| e.to_string())?
+}
+
 /// "Continuar aqui": uma conversa do chat continua uma cópia da sessão `id`
 /// (a que já a continua, a `reuse` se estiver vazia, ou uma nova). Devolve a
 /// conversa e as últimas falas da sessão.
@@ -1209,6 +1224,8 @@ pub fn run() {
             dictate,
             sessions_list,
             session_continue,
+            chat_past,
+            chat_reopen,
             capture_screen,
             screenshot_and_ask,
             snip_open,

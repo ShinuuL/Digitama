@@ -247,7 +247,8 @@ fn chats(app: &AppHandle) -> std::sync::MutexGuard<'_, Chats> {
                 (None, false)
             };
             let title = if s.title.trim().is_empty() { NEW_TITLE.to_string() } else { s.title };
-            g.convs.push(Conv { key: s.key, title, cwd: s.cwd, source: s.source, session_id, fork_pending, ..Default::default() });
+            let oc_session = Some(s.oc_session).filter(|id| !id.is_empty());
+            g.convs.push(Conv { key: s.key, title, cwd: s.cwd, source: s.source, session_id, fork_pending, oc_session, ..Default::default() });
         }
         g.convs.retain(|c| !c.key.is_empty());
         g.next = g.convs.iter().filter_map(|c| c.key.trim_start_matches('c').parse::<u64>().ok()).max().unwrap_or(0);
@@ -258,7 +259,17 @@ fn chats(app: &AppHandle) -> std::sync::MutexGuard<'_, Chats> {
     g
 }
 
-/// Guarda as conversas abertas (para o app reabrir com elas).
+fn now_ms() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
+}
+
+/// O que identifica a conversa no histórico: a sessão do Claude Code ou a do OpenCode.
+fn past_id(c: &SavedConv) -> &str {
+    if c.session.is_empty() { &c.oc_session } else { &c.session }
+}
+
+/// Guarda as conversas abertas (para o app reabrir com elas) e põe no
+/// histórico as que têm sessão (para a lateral reabrir depois de fechadas).
 fn save(app: &AppHandle, g: &Chats) {
     let list: Vec<SavedConv> = g
         .convs
@@ -269,9 +280,104 @@ fn save(app: &AppHandle, g: &Chats) {
             cwd: c.cwd.clone(),
             session: if c.fork_pending { String::new() } else { c.session_id.clone().unwrap_or_default() },
             source: c.source.clone(),
+            oc_session: c.oc_session.clone().unwrap_or_default(),
+            updated: 0,
         })
         .collect();
-    app.state::<Store>().update_quiet(|s| s.chat_convs = list);
+    app.state::<Store>().update_quiet(|s| {
+        for c in &list {
+            let id = past_id(c);
+            if id.is_empty() {
+                continue;
+            }
+            // nova ou com outro título/pasta: vai para o topo
+            match s.chat_past.iter().position(|p| past_id(p) == id) {
+                Some(i) if s.chat_past[i].title == c.title && s.chat_past[i].cwd == c.cwd => continue,
+                Some(i) => {
+                    s.chat_past.remove(i);
+                }
+                None => {}
+            }
+            s.chat_past.insert(0, SavedConv { key: String::new(), source: String::new(), updated: now_ms(), ..c.clone() });
+        }
+        s.chat_past.truncate(crate::store::PAST_MAX);
+        s.chat_convs = list;
+    });
+}
+
+/// Uma conversa antiga do Digitama, para a lateral.
+#[derive(serde::Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct PastInfo {
+    pub id: String,
+    pub title: String,
+    pub cwd: String,
+    /// Nome da pasta do projeto, ou "" (a pasta do chat do Digitama).
+    pub project: String,
+    /// "claude" ou "opencode".
+    pub provider: String,
+    pub updated: u64,
+}
+
+/// As conversas antigas do Digitama que não estão abertas: as do histórico
+/// e, das de antes dele, as que ficaram na pasta do chat.
+pub fn past(app: &AppHandle) -> Vec<PastInfo> {
+    let saved = app.state::<Store>().get().chat_past;
+    let open: std::collections::HashSet<String> = chats(app)
+        .convs
+        .iter()
+        .flat_map(|c| [c.session_id.clone(), c.oc_session.clone()])
+        .flatten()
+        .collect();
+    let mut out: Vec<PastInfo> = Vec::new();
+    for p in &saved {
+        let id = past_id(p).to_string();
+        let provider = if p.session.is_empty() { "opencode" } else { "claude" };
+        // a data do transcrito, quando há (a última mensagem, não a última troca de título)
+        let file = crate::sessions::projects_dir().join(crate::sessions::project_key(&work_dir_for(app, &p.cwd))).join(format!("{id}.jsonl"));
+        let updated = std::fs::metadata(&file).and_then(|m| m.modified()).map(crate::sessions::millis).unwrap_or(p.updated);
+        out.push(PastInfo { id, title: p.title.clone(), cwd: p.cwd.clone(), project: project_name(&p.cwd), provider: provider.into(), updated });
+    }
+    for s in crate::sessions::list_chat(&app.state::<crate::sessions::Cache>(), &chat_dir(app)) {
+        if !out.iter().any(|p| p.id == s.id) {
+            out.push(PastInfo { id: s.id, title: s.title, cwd: String::new(), project: String::new(), provider: "claude".into(), updated: s.updated });
+        }
+    }
+    out.retain(|p| crate::sessions::valid_id(&p.id) && !open.contains(&p.id));
+    out.sort_by_key(|p| std::cmp::Reverse(p.updated));
+    out
+}
+
+fn project_name(cwd: &str) -> String {
+    if cwd.trim().is_empty() {
+        return String::new();
+    }
+    std::path::Path::new(cwd).file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default()
+}
+
+/// Reabre uma conversa antiga do Digitama (a mesma sessão, que é só dela):
+/// a aba que já a tem, ou uma nova. Devolve a chave.
+pub fn reopen(app: &AppHandle, id: &str) -> Result<String, String> {
+    let p = past(app).into_iter().find(|p| p.id == id);
+    let mut g = chats(app);
+    if let Some(c) = g.convs.iter().find(|c| c.session_id.as_deref() == Some(id) || c.oc_session.as_deref() == Some(id)) {
+        return Ok(c.key.clone());
+    }
+    let p = p.ok_or("Conversa não encontrada.")?;
+    let key = g.create(&p.cwd);
+    if let Some(c) = g.find(&key) {
+        if !p.title.trim().is_empty() {
+            c.title = p.title.clone();
+        }
+        if p.provider == "opencode" {
+            c.oc_session = Some(p.id.clone());
+        } else {
+            c.session_id = Some(p.id.clone());
+        }
+    }
+    save(app, &g);
+    changed(app, &g);
+    Ok(key)
 }
 
 /// Avisa a página (abas: título, trabalhando, esperando você) e o pet.
@@ -641,7 +747,10 @@ fn send_opencode(app: &AppHandle, s: &PetState, key: &str, text: &str, attachmen
             if let Some(id) = v.get("sessionID").and_then(Value::as_str).filter(|id| !id.is_empty()) {
                 let mut g = chats(&app);
                 if let Some(c) = g.find(&key).filter(|c| c.generation == generation) {
-                    c.oc_session = Some(id.to_string());
+                    if c.oc_session.as_deref() != Some(id) {
+                        c.oc_session = Some(id.to_string());
+                        save(&app, &g);
+                    }
                 }
             }
             v["provider"] = json!("opencode");
@@ -847,6 +956,9 @@ fn user_event(text: &str, attachments: &[Attachment]) -> Value {
     json!({ "type": "digitama_user", "text": text, "files": files })
 }
 
+/// Quantas falas a conversa reaberta mostra (as mais recentes).
+const HISTORY_MAX: usize = 300;
+
 /// Tudo para a página redesenhar a conversa `key`: o registro, os pedidos ainda
 /// sem resposta, se está respondendo e, se o app acabou de reabrir, o fim da
 /// conversa anterior (que a próxima mensagem continua).
@@ -854,18 +966,18 @@ pub fn history(app: &AppHandle, key: &str) -> Value {
     let mut g = chats(app);
     let Some(c) = g.find(key) else { return json!({ "events": [], "pending": [], "busy": false, "previous": null }) };
     let pending: Vec<String> = c.permissions.keys().cloned().collect();
-    let mut previous = Value::Null;
-    if c.log.is_empty() && !c.fork_pending {
-        if let Some(id) = c.session_id.as_deref().filter(|id| crate::sessions::valid_id(id)) {
-            let file = crate::sessions::projects_dir()
-                .join(crate::sessions::project_key(&work_dir_for(app, &c.cwd)))
-                .join(format!("{id}.jsonl"));
-            if file.is_file() {
-                previous = json!({ "recent": crate::sessions::tail(&file, 6) });
-            }
-        }
+    let file = (c.log.is_empty() && !c.fork_pending)
+        .then(|| c.session_id.clone())
+        .flatten()
+        .filter(|id| crate::sessions::valid_id(id))
+        .map(|id| crate::sessions::projects_dir().join(crate::sessions::project_key(&work_dir_for(app, &c.cwd))).join(format!("{id}.jsonl")));
+    let out = json!({ "events": c.log, "pending": pending, "busy": c.busy, "previous": null });
+    drop(g); // o transcrito pode ter MB: lido sem segurar as conversas
+    let mut out = out;
+    if let Some(file) = file.filter(|f| f.is_file()) {
+        out["previous"] = json!({ "recent": crate::sessions::all(&file, HISTORY_MAX) });
     }
-    json!({ "events": c.log, "pending": pending, "busy": c.busy, "previous": previous })
+    out
 }
 
 /// A pasta do chat do Digitama (fora dos seus projetos).
